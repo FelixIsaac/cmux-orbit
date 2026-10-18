@@ -34,6 +34,9 @@ const state = {
   composerMode: "ask", // "ask" | "shell"
   composerText: "",
   activeModal: null, // null | "spawn" | "ws_switcher" | "shortcuts" | "telemetry" | "vault_preview"
+  draftsBySurface: {}, // surfaceId -> string draft
+  scrollBySurface: {}, // surfaceId -> number scrollTop
+  viewModeBySurface: {}, // surfaceId -> string mode
   spawnForm: {
     target: "surface", // "surface" | "workspace"
     preset: "claude",
@@ -338,13 +341,15 @@ function connectWebSocket() {
           state.surfaceDetail = msg.data;
           state.surfaceLoading = false;
           if (wasEmpty) {
-            state.viewMode = msg.data.modeDefault || "agent";
+            state.viewMode = state.viewModeBySurface[state.activeSurfaceId] || msg.data.modeDefault || "agent";
             if (msg.data.markdownDocument) {
               state.docPreview = msg.data.markdownDocument;
             }
           }
           render();
-          if (wasEmpty) scrollToViewportBottom();
+          if (wasEmpty && state.scrollBySurface[state.activeSurfaceId] === undefined) {
+            scrollToViewportBottom();
+          }
         }
       }
     } catch {
@@ -378,7 +383,16 @@ async function apiPost(body) {
   return res.json();
 }
 
-async function openSurface(workspaceId, surfaceId) {
+async function openSurface(workspaceId, surfaceId, pushHistory = true) {
+  // 1. Save state of previous surface before switching
+  if (state.activeSurfaceId) {
+    const vp = document.getElementById("surface-viewport");
+    if (vp) state.scrollBySurface[state.activeSurfaceId] = vp.scrollTop;
+    const ta = document.getElementById("composer-textarea");
+    if (ta) state.draftsBySurface[state.activeSurfaceId] = ta.value;
+    state.viewModeBySurface[state.activeSurfaceId] = state.viewMode;
+  }
+
   hapticTick();
   state.screen = "surface";
   state.activeWorkspaceId = workspaceId;
@@ -387,6 +401,27 @@ async function openSurface(workspaceId, surfaceId) {
   state.surfaceDetail = null;
   state.gitDiffData = null;
   state.docPreview = null;
+
+  // Restore saved composer draft and saved view mode for this surface
+  state.composerText = state.draftsBySurface[surfaceId] || "";
+  state.viewMode = state.viewModeBySurface[surfaceId] || "agent";
+
+  if (pushHistory) {
+    try {
+      history.pushState(
+        { screen: "surface", ws: workspaceId, surf: surfaceId },
+        "",
+        `#ws=${encodeURIComponent(workspaceId)}&surf=${encodeURIComponent(surfaceId)}`
+      );
+      localStorage.setItem(
+        "cmux_orbit_last_view",
+        JSON.stringify({ screen: "surface", ws: workspaceId, surf: surfaceId })
+      );
+    } catch {
+      // ignore
+    }
+  }
+
   render();
 
   if (ws && ws.readyState === WebSocket.OPEN) {
@@ -400,7 +435,9 @@ async function openSurface(workspaceId, surfaceId) {
     const json = await res.json();
     if (json.ok && json.data) {
       state.surfaceDetail = json.data;
-      state.viewMode = json.data.modeDefault || "agent";
+      if (!state.viewModeBySurface[surfaceId]) {
+        state.viewMode = json.data.modeDefault || "agent";
+      }
       if (json.data.markdownDocument) {
         state.docPreview = json.data.markdownDocument;
       }
@@ -410,15 +447,41 @@ async function openSurface(workspaceId, surfaceId) {
   } finally {
     state.surfaceLoading = false;
     render();
-    scrollToViewportBottom();
+    if (state.scrollBySurface[surfaceId] !== undefined) {
+      const vp = document.getElementById("surface-viewport");
+      if (vp) vp.scrollTop = state.scrollBySurface[surfaceId];
+    } else {
+      scrollToViewportBottom();
+    }
   }
 }
 
-function goHome() {
+function goHome(pushHistory = true) {
+  if (state.activeSurfaceId) {
+    const vp = document.getElementById("surface-viewport");
+    if (vp) state.scrollBySurface[state.activeSurfaceId] = vp.scrollTop;
+    const ta = document.getElementById("composer-textarea");
+    if (ta) state.draftsBySurface[state.activeSurfaceId] = ta.value;
+    state.viewModeBySurface[state.activeSurfaceId] = state.viewMode;
+  }
+
   hapticTick();
   state.screen = "mission";
   state.activeSurfaceId = null;
   state.surfaceDetail = null;
+
+  if (pushHistory) {
+    try {
+      history.pushState({ screen: "mission" }, "", "#");
+      localStorage.setItem(
+        "cmux_orbit_last_view",
+        JSON.stringify({ screen: "mission" })
+      );
+    } catch {
+      // ignore
+    }
+  }
+
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: "unwatch" }));
   }
@@ -1158,23 +1221,38 @@ function renderModal() {
       <div class="sheet-backdrop" data-action="close-modal">
         <div class="sheet-panel" onclick="event.stopPropagation()">
           <div class="sheet-header">
-            <span>Switch Workspace</span>
+            <span>Workspaces</span>
             <button class="btn-icon" data-action="close-modal">✕</button>
           </div>
           <div style="display:flex;flex-direction:column;gap:10px;">
             ${workspaces
               .map((w) => {
+                const isCurrentWs = w.id === state.activeWorkspaceId;
                 const primary = w.surfaces.find((s) => s.isFocused) || w.surfaces[0];
                 return `
-                <div class="workspace-card" data-open-ws="${w.id}" data-open-surf="${primary?.id || ""}">
+                <div class="workspace-card ${isCurrentWs ? "active" : ""}" data-open-ws="${w.id}" data-open-surf="${primary?.id || ""}">
                   <div class="card-top">
                     <div class="ws-title-row">
                       <span class="status-dot ${w.state}"></span>
-                      <span class="ws-title">${escapeHtml(w.title)}</span>
+                      <span class="ws-title" style="${isCurrentWs ? "color:#FFFFFF;font-weight:700;" : ""}">${escapeHtml(w.title)}</span>
+                      ${isCurrentWs ? `<span class="turn-author-badge" style="color:var(--accent-blue);background:rgba(56,189,248,0.12);">CURRENT</span>` : ""}
                     </div>
                     <span class="tab-badge">${w.surfaces.length} tab${w.surfaces.length === 1 ? "" : "s"}</span>
                   </div>
                   <div class="card-cwd">${escapeHtml(shortenPath(w.cwd))}</div>
+                  ${
+                    w.surfaces.length > 1
+                      ? `
+                    <div style="display:flex;gap:6px;overflow-x:auto;padding-top:4px;">
+                      ${w.surfaces.map(s => `
+                        <button class="surface-tab ${s.id === state.activeSurfaceId ? "active" : ""}" data-open-ws="${w.id}" data-open-surf="${s.id}" style="height:24px;font-size:11px;">
+                          ${AGENT_META[s.agentKind]?.icon || ">_"} ${escapeHtml(s.title)}
+                        </button>
+                      `).join("")}
+                    </div>
+                  `
+                      : ""
+                  }
                 </div>
               `;
               })
@@ -1291,8 +1369,9 @@ function render() {
 
   const activeTextarea = document.getElementById("composer-textarea");
   const hadFocus = document.activeElement === activeTextarea;
-  if (activeTextarea) {
+  if (activeTextarea && state.activeSurfaceId) {
     state.composerText = activeTextarea.value;
+    state.draftsBySurface[state.activeSurfaceId] = activeTextarea.value;
   }
 
   const offlineHtml = `<div id="offline-banner" class="offline-banner ${state.connected ? "" : "visible"}">⚠️ Reconnecting to Mac…</div>`;
@@ -1303,14 +1382,25 @@ function render() {
     renderModal();
 
   const nextVp = document.getElementById("surface-viewport");
-  if (nextVp && prevScrollTop !== null) {
-    nextVp.scrollTop = wasNearBottom ? nextVp.scrollHeight : prevScrollTop;
+  if (nextVp) {
+    const savedScroll = state.activeSurfaceId ? state.scrollBySurface[state.activeSurfaceId] : null;
+    if (savedScroll !== null && savedScroll !== undefined) {
+      nextVp.scrollTop = savedScroll;
+    } else if (prevScrollTop !== null) {
+      nextVp.scrollTop = wasNearBottom ? nextVp.scrollHeight : prevScrollTop;
+    }
   }
 
   const nextTextarea = document.getElementById("composer-textarea");
   if (nextTextarea && hadFocus) {
     nextTextarea.focus();
     nextTextarea.selectionStart = nextTextarea.selectionEnd = nextTextarea.value.length;
+  }
+
+  // Smoothly center active surface tab in header
+  const activeTab = document.querySelector(".surface-tab.active");
+  if (activeTab) {
+    activeTab.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
   }
 
   bindEvents();
@@ -1374,6 +1464,9 @@ function bindEvents() {
       hapticTick();
       const m = el.getAttribute("data-mode");
       state.viewMode = m;
+      if (state.activeSurfaceId) {
+        state.viewModeBySurface[state.activeSurfaceId] = m;
+      }
       if (m === "diff") {
         const cwd =
           state.surfaceDetail?.surface?.cwd ||
@@ -1451,6 +1544,9 @@ function bindEvents() {
     vp.addEventListener(
       "scroll",
       () => {
+        if (state.activeSurfaceId) {
+          state.scrollBySurface[state.activeSurfaceId] = vp.scrollTop;
+        }
         const isUp = vp.scrollHeight - vp.scrollTop - vp.clientHeight > 200;
         const btn = document.getElementById("jump-bottom-btn");
         if (btn) btn.classList.toggle("visible", isUp);
@@ -1488,6 +1584,15 @@ function bindEvents() {
         if (e.changedTouches?.length) {
           const dx = e.changedTouches[0].clientX - touchStartX;
           const dy = e.changedTouches[0].clientY - touchStartY;
+
+          // Edge swipe from left bezel (touchStartX < 40px) returns to Deck!
+          if (touchStartX < 40 && dx > 80 && Math.abs(dy) < 50) {
+            hapticTick();
+            goHome();
+            return;
+          }
+
+          // Horizontal swipe across surfaces in this workspace
           if (Math.abs(dx) > 70 && Math.abs(dy) < 45) {
             const currentWs = state.dashboard?.workspaces?.find(
               (w) => w.id === state.activeWorkspaceId
@@ -1541,6 +1646,9 @@ function bindEvents() {
         if (nextTa) {
           nextTa.value = cmd + " ";
           state.composerText = nextTa.value;
+          if (state.activeSurfaceId) {
+            state.draftsBySurface[state.activeSurfaceId] = nextTa.value;
+          }
           nextTa.focus();
         }
       }, 50);
@@ -1646,6 +1754,9 @@ function bindEvents() {
   if (ta) {
     ta.addEventListener("input", () => {
       state.composerText = ta.value;
+      if (state.activeSurfaceId) {
+        state.draftsBySurface[state.activeSurfaceId] = ta.value;
+      }
       ta.style.height = "auto";
       ta.style.height = Math.min(110, ta.scrollHeight) + "px";
     });
@@ -1671,6 +1782,9 @@ async function submitComposer() {
       : raw;
 
   state.composerText = "";
+  if (state.activeSurfaceId) {
+    delete state.draftsBySurface[state.activeSurfaceId];
+  }
   if (ta) ta.value = "";
   render();
 
@@ -1716,6 +1830,35 @@ async function submitSpawn() {
   }
 }
 
+function initNavigationState() {
+  window.addEventListener("popstate", (e) => {
+    if (e.state && e.state.screen === "surface" && e.state.ws && e.state.surf) {
+      openSurface(e.state.ws, e.state.surf, false);
+    } else {
+      goHome(false);
+    }
+  });
+
+  const hash = location.hash.replace(/^#/, "");
+  const params = new URLSearchParams(hash);
+  const hashWs = params.get("ws");
+  const hashSurf = params.get("surf");
+
+  if (hashWs && hashSurf) {
+    openSurface(hashWs, hashSurf, false);
+    return;
+  }
+
+  try {
+    const last = JSON.parse(localStorage.getItem("cmux_orbit_last_view") || "{}");
+    if (last.screen === "surface" && last.ws && last.surf) {
+      openSurface(last.ws, last.surf, false);
+    }
+  } catch {
+    // ignore
+  }
+}
+
 // Dynamic iOS Visual Viewport Keyboard Adjustment
 if (window.visualViewport) {
   const onViewportChange = () => {
@@ -1735,5 +1878,6 @@ if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").catch(() => {});
 }
 
+initNavigationState();
 render();
 connectWebSocket();
