@@ -1,4 +1,9 @@
 // cmux-orbit — Agent-First Mobile Mission Control Client
+import { AnsiUp } from "./vendor/ansi_up.js";
+
+const ansiUp = new AnsiUp();
+ansiUp.use_classes = false;
+ansiUp.escape_html = true;
 
 const AGENT_META = {
   claude: { icon: "✦", label: "Claude", cls: "claude" },
@@ -98,20 +103,150 @@ window.copyCodeSnippet = function (btn) {
   }
 };
 
+function highlightCode(code, lang = "") {
+  let text = escapeHtml(code);
+  const l = (lang || "").toLowerCase();
+  if (!l || l === "text" || l === "plain" || l === "txt") {
+    return text;
+  }
+
+  // Comments (// ... or # ...)
+  const comments = [];
+  text = text.replace(/(\/\/[^\n]*|#[^\n]*|\/\*[\s\S]*?\*\/)/g, (match) => {
+    const idx = comments.length;
+    comments.push(`<span class="token-comment">${match}</span>`);
+    return `@@COMMENT_${idx}@@`;
+  });
+
+  // Strings ("...", '...', `...`)
+  const strings = [];
+  text = text.replace(/("([^"\\]|\\.)*"|'([^'\\]|\\.)*'|`([^`\\]|\\.)*`)/g, (match) => {
+    const idx = strings.length;
+    strings.push(`<span class="token-string">${match}</span>`);
+    return `@@STRING_${idx}@@`;
+  });
+
+  // Numbers & Booleans
+  text = text.replace(/\b(true|false|null|undefined|nil|None|True|False)\b/g, '<span class="token-boolean">$1</span>');
+  text = text.replace(/\b(0x[0-9a-fA-F]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b/g, '<span class="token-number">$1</span>');
+
+  // Keywords
+  const kwRegex = /\b(const|let|var|function|return|import|export|from|as|default|class|extends|interface|type|enum|implements|public|private|protected|readonly|static|async|await|yield|new|this|super|if|else|switch|case|break|continue|for|while|do|in|of|try|catch|finally|throw|typeof|instanceof|void|def|self|lambda|with|elif|print|func|struct|mut|impl|pub|fn|select|where|join|insert|update|delete)\b/g;
+  text = text.replace(kwRegex, '<span class="token-keyword">$1</span>');
+
+  // Types & Builtins
+  text = text.replace(/\b(string|number|boolean|any|void|unknown|never|object|Array|Promise|Record|Map|Set|int|float|str|dict|list|bool)\b/g, '<span class="token-type">$1</span>');
+
+  // Function calls
+  text = text.replace(/\b([a-zA-Z_$][a-zA-Z0-9_$]*)(?=\s*\()/g, '<span class="token-fn">$1</span>');
+
+  // Restore Strings & Comments
+  text = text.replace(/@@STRING_(\d+)@@/g, (_, i) => strings[Number(i)] || "");
+  text = text.replace(/@@COMMENT_(\d+)@@/g, (_, i) => comments[Number(i)] || "");
+
+  return text;
+}
+
+function colorizeTerminalBuffer(rawText) {
+  let text = escapeHtml(rawText);
+  const lines = text.split("\n");
+  const colored = lines.map((line) => {
+    // Prompt line: "❯ ", "$ ", "% "
+    if (/^\s*[❯›$%]\s+/.test(line)) {
+      return `<span class="term-prompt">${line}</span>`;
+    }
+    // Success lines: "✓ ..." or "✔ ..."
+    if (/^\s*[✓✔]\s+/.test(line) || /status:\s*success|build succeeded/i.test(line)) {
+      return `<span class="term-success">${line}</span>`;
+    }
+    // Error lines: "✗ ..." or "Error: ..."
+    if (/^\s*[✗✖!]\s+/.test(line) || /\b(error|failed|fatal|exception)\b/i.test(line)) {
+      return `<span class="term-error">${line}</span>`;
+    }
+    // Warning lines
+    if (/\b(warn|warning)\b/i.test(line)) {
+      return `<span class="term-warn">${line}</span>`;
+    }
+    // Git diff lines
+    if (/^\+[^+]/.test(line)) {
+      return `<span class="diff-add">${line}</span>`;
+    }
+    if (/^-[^-]/.test(line)) {
+      return `<span class="diff-del">${line}</span>`;
+    }
+    // Box-drawing divider lines: ─, ━, ═
+    if (/^[─━═╭╰┌└│┃\s]{6,}$/.test(line)) {
+      return `<span class="term-border">${line}</span>`;
+    }
+    // Telemetry / status bar lines
+    if (/\|.*t\/s.*\|\s*SID:/i.test(line) || /^ctx:\s*.*cmpct:/i.test(line)) {
+      return `<span class="term-telemetry">${line}</span>`;
+    }
+    return line;
+  });
+  return colored.join("\n");
+}
+
+function renderTerminalAnsi(rawText) {
+  if (!rawText) return "";
+  if (rawText.includes("\x1b[") || rawText.includes("\u001b[")) {
+    try {
+      return ansiUp.ansi_to_html(rawText);
+    } catch {
+      return colorizeTerminalBuffer(rawText);
+    }
+  }
+  return colorizeTerminalBuffer(rawText);
+}
+
+window.copyTerminalText = function () {
+  const raw = state.surfaceDetail?.rawTerminalText || "";
+  if (navigator.clipboard && raw) {
+    navigator.clipboard.writeText(raw).then(() => {
+      hapticTick("medium");
+      const btn = document.getElementById("copy-term-btn");
+      if (btn) {
+        btn.textContent = "✓ Copied";
+        setTimeout(() => {
+          btn.textContent = "Copy";
+        }, 1600);
+      }
+    });
+  }
+};
+
 function renderMarkdown(md) {
   if (!md) return "";
   let text = escapeHtml(md);
 
-  // Extract fenced code blocks first
+  // Extract fenced code blocks first with syntax highlighting
   const codeBlocks = [];
   text = text.replace(/```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g, (_m, lang, code) => {
     const idx = codeBlocks.length;
     const cleanCode = code.trimEnd();
+    const highlighted = highlightCode(cleanCode, lang);
     codeBlocks.push(
-      `<div class="code-block-wrapper"><button class="copy-code-btn" onclick="copyCodeSnippet(this)">Copy</button><pre><code class="lang-${lang || "text"}">${cleanCode}</code></pre></div>`
+      `<div class="code-block-wrapper"><button class="copy-code-btn" onclick="copyCodeSnippet(this)">Copy</button><pre><code class="lang-${lang || "text"}">${highlighted}</code></pre></div>`
     );
     return `@@CODEBLOCK_${idx}@@`;
   });
+
+  // Callout Alerts: > [!NOTE], > [!TIP], > [!IMPORTANT], > [!WARNING], > [!CAUTION]
+  text = text.replace(
+    /^(?:&gt;\s*)+\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]([^\n]*)\n([\s\S]*?)(?=(?:\n{2,}|\n(?=[^&])|$))/gim,
+    (_m, type, title, body) => {
+      const t = type.toLowerCase();
+      const icons = {
+        note: "ℹ️ Note",
+        tip: "💡 Tip",
+        important: "⚡ Important",
+        warning: "⚠️ Warning",
+        caution: "🛑 Caution",
+      };
+      const cleanBody = body.replace(/^(?:&gt;\s*)+/gm, "").trim();
+      return `<div class="callout-alert ${t}"><div class="callout-title">${icons[t] || type}${title ? `: ${title.trim()}` : ""}</div><div class="callout-body">${cleanBody}</div></div>`;
+    }
+  );
 
   // Markdown tables: lines with pipes | a | b |
   text = text.replace(/((?:^|\n)\|[^\n]+\|\n\|[-:\s|]+\|\n(?:\|[^\n]+\|\n?)+)/g, (match) => {
@@ -138,9 +273,11 @@ function renderMarkdown(md) {
   text = text.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   text = text.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
 
-  // Bullet lists
+  // Bullet lists & Task Checkboxes
+  text = text.replace(/^\s*[-*]\s+\[x\]\s+(.+)$/gm, '<li class="task-item checked"><span class="task-check">✓</span> <span>$1</span></li>');
+  text = text.replace(/^\s*[-*]\s+\[ \]\s+(.+)$/gm, '<li class="task-item"><span class="task-check unchecked"></span> <span>$1</span></li>');
   text = text.replace(/^\s*[-*]\s+(.+)$/gm, "<li>$1</li>");
-  text = text.replace(/(<li>[\s\S]*?<\/li>)/g, "<ul>$1</ul>");
+  text = text.replace(/(<li[\s\S]*?<\/li>)/g, "<ul>$1</ul>");
   text = text.replace(/<\/ul>\s*<ul>/g, "");
 
   // Paragraphs
@@ -775,15 +912,23 @@ function renderSurfaceViewportContent(detail, surf, ws) {
   if (state.viewMode === "terminal") {
     const rawText = detail?.rawTerminalText || "No terminal buffer output.";
     return `
-      <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
-        <span class="ws-cwd">${escapeHtml(shortenPath(surf?.cwd || ws?.cwd || ""))}</span>
-        <div style="display:flex; gap:6px;">
-          <button class="icon-btn" data-action="toggle-wrap">${state.terminalWrap ? "⇄ Reflow" : "→ Scroll"}</button>
-          <button class="icon-btn" data-action="font-dec">A-</button>
-          <button class="icon-btn" data-action="font-inc">A+</button>
+      <div class="terminal-container">
+        <div class="terminal-chrome-header">
+          <div class="terminal-dots">
+            <span class="term-dot red"></span>
+            <span class="term-dot yellow"></span>
+            <span class="term-dot green"></span>
+          </div>
+          <span class="terminal-title">${escapeHtml(surf?.title || "Terminal")} · ${escapeHtml(shortenPath(surf?.cwd || ws?.cwd || ""))}</span>
+          <div class="terminal-actions">
+            <button class="icon-btn" id="copy-term-btn" onclick="copyTerminalText()">Copy</button>
+            <button class="icon-btn" data-action="toggle-wrap">${state.terminalWrap ? "⇄ Reflow" : "→ Scroll"}</button>
+            <button class="icon-btn" data-action="font-dec">A-</button>
+            <button class="icon-btn" data-action="font-inc">A+</button>
+          </div>
         </div>
+        <pre class="terminal-box ${state.terminalWrap ? "" : "nowrap"}" style="font-size:${state.terminalFontSize}px;">${renderTerminalAnsi(rawText)}</pre>
       </div>
-      <pre class="terminal-box ${state.terminalWrap ? "" : "nowrap"}" style="font-size:${state.terminalFontSize}px;">${escapeHtml(rawText)}</pre>
     `;
   }
 
@@ -894,7 +1039,7 @@ function renderSurfaceViewportContent(detail, surf, ws) {
           <span>● Live Terminal Tail</span>
           <button class="icon-btn" style="min-height:26px;padding:0 8px;font-size:11px;" data-mode="terminal">Full CLI →</button>
         </div>
-        <pre class="live-stream-pre">${escapeHtml(liveSnippet)}</pre>
+        <pre class="live-stream-pre">${renderTerminalAnsi(liveSnippet)}</pre>
       </div>
     `
         : ""

@@ -23,5 +23,8 @@
     "ai-agents"
   ],
   "author": "Felix Isaac Lim <38658663+FelixIsaac@users.noreply.github.com>",
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "ansi_up": "6.0.6"
+  }
 }
