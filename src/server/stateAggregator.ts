@@ -4,6 +4,7 @@ import {
   type AgentStatusTelemetry,
   type DetectedPrompt,
 } from "./screenAnalyzer";
+import { renderGridToAnsiAndPlain } from "./terminalAnsi";
 import {
   loadHookSessions,
   parseTranscriptFile,
@@ -84,6 +85,7 @@ export interface OrbitSurfaceDetail {
   modeDefault: "agent" | "markdown" | "terminal";
   messages: ConversationMessage[];
   rawTerminalText: string;
+  rawTerminalAnsi?: string;
   cleanTerminalText: string;
   liveProseSnippet: string | null;
   detectedPrompt: DetectedPrompt | null;
@@ -425,20 +427,45 @@ export async function getSurfaceDetail(
 
   // Case 2: Terminal / Agent surface
   let rawTerminalText = "";
+  let rawTerminalAnsi = "";
+
   try {
-    const readRes = await cmuxRpc<{ text: string }>(
-      "surface.read_text",
-      {
-        workspace_id: ws.id,
-        surface_id: surf.id,
-        lines: 140,
-        scrollback: true,
-      },
-      3000
+    const replayRes = await cmuxRpc<{ render_grid?: any }>(
+      "terminal.replay",
+      { surface_id: surf.id },
+      2500
     );
-    rawTerminalText = readRes?.text || "";
+    if (replayRes?.render_grid) {
+      const result = renderGridToAnsiAndPlain(replayRes.render_grid, 180);
+      rawTerminalAnsi = result.ansi;
+      if (result.plainText) {
+        rawTerminalText = result.plainText;
+      }
+    }
   } catch {
-    rawTerminalText = "";
+    // Ignore and fall back to surface.read_text
+  }
+
+  if (!rawTerminalText) {
+    try {
+      const readRes = await cmuxRpc<{ text: string }>(
+        "surface.read_text",
+        {
+          workspace_id: ws.id,
+          surface_id: surf.id,
+          lines: 140,
+          scrollback: true,
+        },
+        3000
+      );
+      rawTerminalText = readRes?.text || "";
+    } catch {
+      rawTerminalText = "";
+    }
+  }
+
+  if (!rawTerminalAnsi && rawTerminalText) {
+    rawTerminalAnsi = rawTerminalText.replace(/\n/g, "\r\n");
   }
 
   const analysis = analyzeScreenText(rawTerminalText);
@@ -504,6 +531,7 @@ export async function getSurfaceDetail(
     modeDefault,
     messages,
     rawTerminalText,
+    rawTerminalAnsi,
     cleanTerminalText: analysis.cleanLines.join("\n"),
     liveProseSnippet: analysis.liveProseSnippet,
     detectedPrompt: analysis.prompt,

@@ -197,16 +197,139 @@ function renderTerminalAnsi(rawText) {
   return colorizeTerminalBuffer(rawText);
 }
 
+let activeTerminalInstance = null;
+let activeTerminalFitAddon = null;
+let activeTerminalSurfaceId = null;
+let lastTerminalAnsiRendered = null;
+
+function ensureXtermMounted(rawAnsi) {
+  const container = document.getElementById("xterm-container");
+  if (!container) return;
+
+  if (typeof window.Terminal === "undefined") {
+    container.innerHTML = `<pre class="terminal-box ${state.terminalWrap ? "" : "nowrap"}" style="font-size:${state.terminalFontSize || 12.5}px;">${renderTerminalAnsi(state.surfaceDetail?.rawTerminalText || "")}</pre>`;
+    return;
+  }
+
+  // If switching surface, dispose previous instance
+  if (activeTerminalInstance && activeTerminalSurfaceId !== state.activeSurfaceId) {
+    try {
+      activeTerminalInstance.dispose();
+    } catch {}
+    activeTerminalInstance = null;
+    activeTerminalFitAddon = null;
+    activeTerminalSurfaceId = null;
+    lastTerminalAnsiRendered = null;
+  }
+
+  if (!activeTerminalInstance) {
+    container.innerHTML = "";
+    const term = new window.Terminal({
+      cursorBlink: true,
+      convertEol: true,
+      fontFamily: 'ui-monospace, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+      fontSize: state.terminalFontSize || 12.5,
+      lineHeight: 1.25,
+      theme: {
+        background: "#000000",
+        foreground: "#E5E7EB",
+        cursor: "#38BDF8",
+        selectionBackground: "rgba(56, 189, 248, 0.3)",
+        black: "#1E1E2E",
+        red: "#F38BA8",
+        green: "#A6E3A1",
+        yellow: "#F9E2AF",
+        blue: "#89B4FA",
+        magenta: "#CBA6F7",
+        cyan: "#89DCEB",
+        white: "#CDD6F4",
+        brightBlack: "#585B70",
+        brightRed: "#F38BA8",
+        brightGreen: "#A6E3A1",
+        brightYellow: "#F9E2AF",
+        brightBlue: "#89B4FA",
+        brightMagenta: "#CBA6F7",
+        brightCyan: "#89DCEB",
+        brightWhite: "#BAC2DE",
+      },
+      scrollback: 2500,
+      disableStdin: false,
+    });
+
+    const FitClass = window.FitAddon?.FitAddon || window.FitAddon;
+    let fit = null;
+    if (FitClass) {
+      fit = new FitClass();
+      term.loadAddon(fit);
+    }
+
+    term.open(container);
+    if (fit) {
+      try { fit.fit(); } catch {}
+    }
+
+    // Direct terminal typing from keyboard
+    term.onData(async (data) => {
+      if (!state.activeSurfaceId || !state.activeWorkspaceId) return;
+      await apiPost({
+        action: "send_prompt",
+        workspaceId: state.activeWorkspaceId,
+        surfaceId: state.activeSurfaceId,
+        text: data,
+        submit: false,
+      });
+    });
+
+    activeTerminalInstance = term;
+    activeTerminalFitAddon = fit;
+    activeTerminalSurfaceId = state.activeSurfaceId;
+
+    window.addEventListener("resize", () => {
+      if (activeTerminalFitAddon) {
+        try { activeTerminalFitAddon.fit(); } catch {}
+      }
+    });
+  }
+
+  // Update ANSI data
+  if (rawAnsi && rawAnsi !== lastTerminalAnsiRendered) {
+    activeTerminalInstance.clear();
+    activeTerminalInstance.write(rawAnsi);
+    lastTerminalAnsiRendered = rawAnsi;
+    activeTerminalInstance.scrollToBottom();
+    if (activeTerminalFitAddon) {
+      try { activeTerminalFitAddon.fit(); } catch {}
+    }
+  }
+}
+
+function disposeXterm() {
+  if (activeTerminalInstance) {
+    try {
+      activeTerminalInstance.dispose();
+    } catch {}
+    activeTerminalInstance = null;
+    activeTerminalFitAddon = null;
+    activeTerminalSurfaceId = null;
+    lastTerminalAnsiRendered = null;
+  }
+}
+
 window.copyTerminalText = function () {
-  const raw = state.surfaceDetail?.rawTerminalText || "";
+  const raw =
+    activeTerminalInstance?.getSelection() ||
+    state.surfaceDetail?.rawTerminalText ||
+    state.surfaceDetail?.cleanTerminalText ||
+    "";
   if (navigator.clipboard && raw) {
     navigator.clipboard.writeText(raw).then(() => {
       hapticTick("medium");
-      const btn = document.getElementById("copy-term-btn");
+      const btn = document.querySelector('[data-action="term-copy"]') || document.getElementById("copy-term-btn");
       if (btn) {
+        const old = btn.textContent;
         btn.textContent = "✓ Copied";
         setTimeout(() => {
-          btn.textContent = "Copy";
+          btn.textContent = old;
         }, 1600);
       }
     });
@@ -882,36 +1005,69 @@ function renderSurfaceScreen() {
         ${renderSurfaceViewportContent(detail, surf, ws)}
       </main>
 
-      <button id="jump-bottom-btn" class="jump-bottom-btn" onclick="scrollToViewportBottom()">
-        ${isRunning ? `<span class="status-dot running" style="width:6px;height:6px;"></span> ` : ""}↓ Latest
-      </button>
+      ${state.viewMode !== "terminal" ? `
+        <button id="jump-bottom-btn" class="jump-bottom-btn" onclick="scrollToViewportBottom()">
+          ${isRunning ? `<span class="status-dot running" style="width:6px;height:6px;"></span> ` : ""}↓ Latest
+        </button>
+      ` : ""}
 
       <div id="tui-prompt-dock-container">
         ${prompt ? renderTuiPromptDeck(prompt, ws?.id, surf?.id) : ""}
       </div>
 
-      <footer class="composer-dock" id="composer-dock">
-        <div class="composer-shell">
-          <button class="composer-tool-btn" data-action="open-shortcuts" title="Signals & Shortcuts">···</button>
-          <button class="composer-tool-btn" data-action="toggle-composer-mode" title="Toggle Ask vs Shell" style="font-size:13px;font-family:var(--font-mono);font-weight:700;">
-            ${state.composerMode === "shell" ? "$" : "✦"}
-          </button>
-          <textarea
-            id="composer-textarea"
-            class="composer-input"
-            rows="1"
-            autocorrect="off"
-            autocapitalize="sentences"
-            spellcheck="true"
-            placeholder="${
-              state.composerMode === "shell"
-                ? "Run shell command (! or raw)…"
-                : `Message ${AGENT_META[surf?.agentKind]?.label || "surface"}…`
-            }"
-          >${escapeHtml(state.composerText)}</textarea>
-          <button class="composer-send-btn" data-action="submit-composer">↑</button>
-        </div>
-      </footer>
+      ${state.viewMode === "terminal" ? `
+        <footer class="terminal-dock" id="terminal-dock">
+          <div class="terminal-keys-row">
+            <button class="term-key-btn sigint" data-action="term-key" data-key="ctrl+c" title="Interrupt process (SIGINT)">^C</button>
+            <button class="term-key-btn" data-action="term-key" data-key="esc" title="Escape">Esc</button>
+            <button class="term-key-btn" data-action="term-key" data-key="tab" title="Tab Autocomplete">Tab</button>
+            <button class="term-key-btn" data-action="term-key" data-key="up" title="Previous Command">↑</button>
+            <button class="term-key-btn" data-action="term-key" data-key="down" title="Next Command">↓</button>
+            <button class="term-key-btn" data-action="term-key" data-key="enter" title="Enter">↵</button>
+            <button class="term-key-btn" data-action="term-clear" title="Clear Screen">Clear</button>
+            <button class="term-key-btn" data-action="term-copy" title="Copy Output">Copy</button>
+            <button class="term-key-btn" data-action="font-dec" title="Smaller font">A-</button>
+            <button class="term-key-btn" data-action="font-inc" title="Larger font">A+</button>
+          </div>
+          <form id="terminal-command-form" class="terminal-command-row">
+            <span class="terminal-prompt-glyph">$</span>
+            <input
+              type="text"
+              id="terminal-command-input"
+              class="terminal-command-input"
+              placeholder="Type shell command (e.g. ls -la, git status, cargo test)…"
+              autocomplete="off"
+              autocorrect="off"
+              autocapitalize="none"
+              spellcheck="false"
+            />
+            <button type="submit" class="terminal-send-btn" id="terminal-send-btn">↵ Run</button>
+          </form>
+        </footer>
+      ` : `
+        <footer class="composer-dock" id="composer-dock">
+          <div class="composer-shell">
+            <button class="composer-tool-btn" data-action="open-shortcuts" title="Signals & Shortcuts">···</button>
+            <button class="composer-tool-btn" data-action="toggle-composer-mode" title="Toggle Ask vs Shell" style="font-size:13px;font-family:var(--font-mono);font-weight:700;">
+              ${state.composerMode === "shell" ? "$" : "✦"}
+            </button>
+            <textarea
+              id="composer-textarea"
+              class="composer-input"
+              rows="1"
+              autocorrect="off"
+              autocapitalize="sentences"
+              spellcheck="true"
+              placeholder="${
+                state.composerMode === "shell"
+                  ? "Run shell command (! or raw)…"
+                  : `Message ${AGENT_META[surf?.agentKind]?.label || "surface"}…`
+              }"
+            >${escapeHtml(state.composerText)}</textarea>
+            <button class="composer-send-btn" data-action="submit-composer">↑</button>
+          </div>
+        </footer>
+      `}
     </div>
   `;
 }
@@ -1046,18 +1202,12 @@ function renderSurfaceViewportContent(detail, surf, ws) {
   }
 
   if (state.viewMode === "terminal") {
-    const rawText = detail?.rawTerminalText || "No terminal buffer output.";
     return `
-      <div class="terminal-header-bar">
-        <span style="font-size:12px;font-family:var(--font-mono);color:var(--text-muted);">${escapeHtml(surf?.title || "Terminal")}</span>
-        <div style="display:flex;gap:6px;">
-          <button class="btn-icon" id="copy-term-btn" onclick="copyTerminalText()">Copy</button>
-          <button class="btn-icon" data-action="toggle-wrap">${state.terminalWrap ? "⇄ Reflow" : "→ Scroll"}</button>
-          <button class="btn-icon" data-action="font-dec">A-</button>
-          <button class="btn-icon" data-action="font-inc">A+</button>
-        </div>
+      <div id="xterm-container" class="xterm-fullscreen-container">
+        <noscript>
+          <pre class="terminal-box ${state.terminalWrap ? "" : "nowrap"}" style="font-size:${state.terminalFontSize || 12.5}px;">${renderTerminalAnsi(detail?.rawTerminalText || "")}</pre>
+        </noscript>
       </div>
-      <pre class="terminal-box ${state.terminalWrap ? "" : "nowrap"}" style="font-size:${state.terminalFontSize}px;">${renderTerminalAnsi(rawText)}</pre>
     `;
   }
 
@@ -1483,7 +1633,14 @@ function render() {
     if (activeTab) {
       activeTab.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
     }
+
+    if (state.viewMode === "terminal") {
+      ensureXtermMounted(state.surfaceDetail?.rawTerminalAnsi || state.surfaceDetail?.rawTerminalText);
+    } else {
+      disposeXterm();
+    }
   } else {
+    disposeXterm();
     container.innerHTML = renderMissionControl();
     bindMissionEvents();
   }
@@ -1567,20 +1724,24 @@ function updateSurfaceInPlace(detail) {
   // 5. Surface Viewport Content
   const vp = document.getElementById("surface-viewport");
   if (vp) {
-    const newContentHtml = renderSurfaceViewportContent(detail, surf, ws);
-    if (vp.innerHTML !== newContentHtml) {
-      const isNearBottom = vp.scrollHeight - vp.scrollTop - vp.clientHeight < 80;
-      const prevScrollTop = vp.scrollTop;
+    if (state.viewMode === "terminal") {
+      ensureXtermMounted(detail.rawTerminalAnsi || detail.rawTerminalText);
+    } else {
+      const newContentHtml = renderSurfaceViewportContent(detail, surf, ws);
+      if (vp.innerHTML !== newContentHtml) {
+        const isNearBottom = vp.scrollHeight - vp.scrollTop - vp.clientHeight < 80;
+        const prevScrollTop = vp.scrollTop;
 
-      vp.innerHTML = newContentHtml;
+        vp.innerHTML = newContentHtml;
 
-      if (isNearBottom) {
-        vp.scrollTop = vp.scrollHeight;
-      } else {
-        vp.scrollTop = prevScrollTop;
+        if (isNearBottom) {
+          vp.scrollTop = vp.scrollHeight;
+        } else {
+          vp.scrollTop = prevScrollTop;
+        }
+
+        bindViewportEvents();
       }
-
-      bindViewportEvents();
     }
   }
   // Composer textarea and buttons are completely preserved without redraw!
@@ -1757,21 +1918,13 @@ function bindSurfaceEvents() {
   document.querySelectorAll("[data-mode]").forEach((el) => {
     el.addEventListener("click", () => {
       hapticTick();
-      const m = el.getAttribute("data-mode");
+      let m = el.getAttribute("data-mode");
+      if (m === "terminal" && state.viewMode === "terminal") {
+        m = "agent";
+      }
       state.viewMode = m;
       if (state.activeSurfaceId) {
         state.viewModeBySurface[state.activeSurfaceId] = m;
-      }
-      document.querySelectorAll("[data-mode]").forEach((b) => {
-        b.classList.toggle("active", b.getAttribute("data-mode") === m);
-      });
-      const vp = document.getElementById("surface-viewport");
-      if (vp) {
-        vp.className = m === "terminal" ? "terminal-view" : m === "diff" ? "diff-view" : "conversation-stream";
-        const ws = state.dashboard?.workspaces?.find((w) => w.id === state.activeWorkspaceId);
-        const surf = state.surfaceDetail?.surface || ws?.surfaces?.find((s) => s.id === state.activeSurfaceId);
-        vp.innerHTML = renderSurfaceViewportContent(state.surfaceDetail, surf, ws);
-        bindViewportEvents();
       }
       if (m === "diff") {
         const cwd =
@@ -1779,6 +1932,7 @@ function bindSurfaceEvents() {
           state.dashboard?.workspaces?.find((w) => w.id === state.activeWorkspaceId)?.cwd;
         loadGitDiff(cwd);
       }
+      render();
     });
   });
 
@@ -1792,14 +1946,7 @@ function bindSurfaceEvents() {
           hapticTick();
           state.peekModePrev = state.viewMode;
           state.viewMode = "terminal";
-          const vp = document.getElementById("surface-viewport");
-          if (vp) {
-            vp.className = "terminal-view";
-            const ws = state.dashboard?.workspaces?.find((w) => w.id === state.activeWorkspaceId);
-            const surf = state.surfaceDetail?.surface || ws?.surfaces?.find((s) => s.id === state.activeSurfaceId);
-            vp.innerHTML = renderSurfaceViewportContent(state.surfaceDetail, surf, ws);
-            bindViewportEvents();
-          }
+          render();
         }, 260);
       }
     });
@@ -1808,14 +1955,7 @@ function bindSurfaceEvents() {
       if (state.peekModePrev) {
         state.viewMode = state.peekModePrev;
         state.peekModePrev = null;
-        const vp = document.getElementById("surface-viewport");
-        if (vp) {
-          vp.className = state.viewMode === "terminal" ? "terminal-view" : state.viewMode === "diff" ? "diff-view" : "conversation-stream";
-          const ws = state.dashboard?.workspaces?.find((w) => w.id === state.activeWorkspaceId);
-          const surf = state.surfaceDetail?.surface || ws?.surfaces?.find((s) => s.id === state.activeSurfaceId);
-          vp.innerHTML = renderSurfaceViewportContent(state.surfaceDetail, surf, ws);
-          bindViewportEvents();
-        }
+        render();
       }
     };
     cliBtn.addEventListener("pointerup", endHold);
@@ -1825,7 +1965,11 @@ function bindSurfaceEvents() {
   bindTabsEvents();
   bindPromptEvents();
   bindViewportEvents();
-  bindComposerEvents();
+  if (state.viewMode === "terminal") {
+    bindTerminalDockEvents();
+  } else {
+    bindComposerEvents();
+  }
 }
 
 function bindTabsEvents() {
@@ -2022,6 +2166,85 @@ function bindComposerEvents() {
         e.preventDefault();
         await submitComposer();
       }
+    });
+  }
+}
+
+function bindTerminalDockEvents() {
+  const dock = document.getElementById("terminal-dock");
+  if (!dock) return;
+
+  dock.querySelectorAll('[data-action="term-key"]').forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      const key = btn.getAttribute("data-key");
+      if (!key || !state.activeSurfaceId || !state.activeWorkspaceId) return;
+      hapticTick("medium");
+      await apiPost({
+        action: "send_key",
+        workspaceId: state.activeWorkspaceId,
+        surfaceId: state.activeSurfaceId,
+        key,
+      });
+    });
+  });
+
+  dock.querySelectorAll('[data-action="term-clear"]').forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      hapticTick();
+      if (activeTerminalInstance) {
+        activeTerminalInstance.clear();
+      }
+    });
+  });
+
+  dock.querySelectorAll('[data-action="term-copy"]').forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      copyTerminalText();
+    });
+  });
+
+  dock.querySelectorAll('[data-action="font-dec"]').forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      state.terminalFontSize = Math.max(9.5, (state.terminalFontSize || 12.5) - 1);
+      if (activeTerminalInstance) {
+        activeTerminalInstance.options.fontSize = state.terminalFontSize;
+        try { activeTerminalFitAddon?.fit(); } catch {}
+      }
+    });
+  });
+
+  dock.querySelectorAll('[data-action="font-inc"]').forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      state.terminalFontSize = Math.min(20, (state.terminalFontSize || 12.5) + 1);
+      if (activeTerminalInstance) {
+        activeTerminalInstance.options.fontSize = state.terminalFontSize;
+        try { activeTerminalFitAddon?.fit(); } catch {}
+      }
+    });
+  });
+
+  const form = document.getElementById("terminal-command-form");
+  if (form) {
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const input = document.getElementById("terminal-command-input");
+      if (!input) return;
+      const cmd = input.value.trim();
+      if (!cmd) return;
+      input.value = "";
+      hapticTick("medium");
+      await apiPost({
+        action: "send_prompt",
+        workspaceId: state.activeWorkspaceId,
+        surfaceId: state.activeSurfaceId,
+        text: cmd,
+        submit: true,
+      });
     });
   }
 }

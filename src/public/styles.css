@@ -931,40 +931,214 @@ button:active,
   transform: translateY(0);
 }
 
-/* Full Terminal View (CLI Mode) */
+/* Edge-to-Edge Fullscreen Terminal (CLI Mode) */
 .terminal-view {
   flex: 1;
-  padding: 12px 14px calc(var(--composer-safe-bottom) + 80px);
+  padding: 0 !important;
+  margin: 0 !important;
+  background: #000000 !important;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  overflow: hidden;
+  position: relative;
+  height: 100%;
+  width: 100%;
 }
 
-.terminal-header-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 4px;
+.xterm-fullscreen-container {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  background: #000000;
+  padding: 6px 8px calc(var(--safe-bottom) + 90px) 8px;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.xterm-fullscreen-container .xterm {
+  height: 100%;
+  width: 100%;
+  padding: 0;
+}
+
+.xterm-fullscreen-container .xterm-viewport {
+  overflow-y: auto !important;
+  background: #000000 !important;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+
+.xterm-fullscreen-container .xterm-viewport::-webkit-scrollbar {
+  width: 4px;
+}
+
+.xterm-fullscreen-container .xterm-viewport::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 2px;
+}
+
+.xterm-fullscreen-container .xterm-rows {
+  font-feature-settings: "liga" 0;
 }
 
 .terminal-box {
-  background: #08090C;
-  border: 1px solid var(--border-subtle);
-  border-radius: 12px;
-  padding: 12px;
+  background: #000000;
+  border: none;
+  border-radius: 0;
+  padding: 8px;
+  margin: 0;
   font-family: var(--font-mono);
   font-size: 12.5px;
-  line-height: 1.45;
+  line-height: 1.4;
   color: #E5E7EB;
   white-space: pre-wrap;
   word-break: break-word;
   overflow-x: auto;
-  min-height: 60dvh;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  min-height: 100%;
+  box-sizing: border-box;
 }
 .terminal-box.nowrap {
   white-space: pre;
   word-break: normal;
+}
+
+/* Authentic Terminal Dock (Accessory Bar & Command Input) */
+.terminal-dock {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 100;
+  background: rgba(8, 9, 12, 0.94);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  backdrop-filter: blur(24px) saturate(180%);
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 6px 10px calc(var(--safe-bottom) + 6px);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.6);
+}
+
+.terminal-keys-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 2px;
+  scrollbar-width: none;
+}
+
+.terminal-keys-row::-webkit-scrollbar {
+  display: none;
+}
+
+.term-key-btn {
+  height: 32px;
+  min-width: 40px;
+  padding: 0 10px;
+  background: #16171E;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: #EDEDED;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  transition: transform 0.08s ease, background 0.12s ease;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.term-key-btn:active {
+  transform: scale(0.92);
+  background: #2A2B36;
+}
+
+.term-key-btn.sigint {
+  background: rgba(239, 68, 68, 0.18);
+  border-color: rgba(239, 68, 68, 0.45);
+  color: #F87171;
+}
+
+.term-key-btn.sigint:active {
+  background: rgba(239, 68, 68, 0.35);
+}
+
+.term-key-btn.accent {
+  background: rgba(56, 189, 248, 0.16);
+  border-color: rgba(56, 189, 248, 0.35);
+  color: #38BDF8;
+}
+
+.terminal-command-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #0E1015;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  padding: 3px 4px 3px 10px;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+.terminal-command-row:focus-within {
+  border-color: rgba(56, 189, 248, 0.5);
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.15), inset 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+.terminal-prompt-glyph {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: #34D399;
+  font-size: 14px;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.terminal-command-input {
+  flex: 1;
+  height: 32px;
+  background: transparent;
+  border: none;
+  color: #FFFFFF;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  outline: none;
+  min-width: 0;
+}
+
+.terminal-command-input::placeholder {
+  color: rgba(255, 255, 255, 0.32);
+}
+
+.terminal-send-btn {
+  height: 28px;
+  padding: 0 12px;
+  background: #38BDF8;
+  color: #000000;
+  font-weight: 700;
+  font-size: 12.5px;
+  border: none;
+  border-radius: 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: transform 0.08s ease, opacity 0.12s ease;
+}
+
+.terminal-send-btn:active {
+  transform: scale(0.95);
+  opacity: 0.85;
 }
 
 /* Terminal ANSI Colors */
