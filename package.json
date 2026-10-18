@@ -1,0 +1,27 @@
+{
+  "name": "cmux-orbit",
+  "version": "1.0.0",
+  "description": "Agent-First Mobile Mission Control for cmux — Run Claude Code, Grok CLI, Codex, Pi, Antigravity & Shell natively from your phone over Tailscale.",
+  "type": "module",
+  "bin": {
+    "cmux-orbit": "./bin/cmux-orbit"
+  },
+  "scripts": {
+    "start": "bun run src/server/index.ts",
+    "dev": "bun --watch run src/server/index.ts",
+    "test": "bun test"
+  },
+  "keywords": [
+    "cmux",
+    "claude-code",
+    "grok-cli",
+    "codex",
+    "pi",
+    "tailscale",
+    "mobile",
+    "terminal-multiplexer",
+    "ai-agents"
+  ],
+  "author": "Felix Isaac Lim <38658663+FelixIsaac@users.noreply.github.com>",
+  "license": "MIT"
+}

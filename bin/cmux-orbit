@@ -1,0 +1,129 @@
+#!/usr/bin/env bun
+import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { homedir, networkInterfaces } from "node:os";
+import { join, resolve } from "node:path";
+import { resolveCmuxSocketPath } from "../src/server/cmuxSocket";
+
+const args = process.argv.slice(2);
+const subcmd = args[0] || "start";
+const portIdx = args.indexOf("--port");
+const port =
+  portIdx !== -1 && args[portIdx + 1]
+    ? Number(args[portIdx + 1])
+    : Number(process.env.PORT || 4400);
+
+function detectTailscaleIp(): string | null {
+  const nets = networkInterfaces();
+  for (const entries of Object.values(nets)) {
+    if (!entries) continue;
+    for (const addr of entries) {
+      if (addr.family === "IPv4" && !addr.internal) {
+        const parts = addr.address.split(".").map((n) => parseInt(n, 10));
+        if (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) {
+          return addr.address;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+if (subcmd === "status") {
+  const sock = resolveCmuxSocketPath();
+  const tsIp = detectTailscaleIp();
+  console.log(`✦ cmux-orbit status`);
+  console.log(`  cmux.sock : ${sock} (${existsSync(sock) ? "✓ connected" : "✕ missing"})`);
+  console.log(`  Local URL : http://127.0.0.1:${port}`);
+  if (tsIp) {
+    console.log(`  Tailscale : http://${tsIp}:${port}  <-- Open this on your iPhone (Add to Home Screen)`);
+  }
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/dashboard`, {
+      headers: { Connection: "close" },
+    });
+    const body = (await res.json()) as any;
+    const snap = body.data;
+    console.log(`  Daemon    : ✓ running on port ${port}`);
+    console.log(
+      `  Live State: ${snap.totalWorkspaces} workspaces, ${snap.totalSurfaces} surfaces (${snap.needsInputCount} needs input, ${snap.runningCount} running)`
+    );
+  } catch (err: any) {
+    console.log(`  Daemon    : ✕ not reachable on port ${port} (${err?.message})`);
+  }
+  process.exit(0);
+}
+
+if (subcmd === "install-service") {
+  const home = homedir();
+  const launchAgentsDir = join(home, "Library/LaunchAgents");
+  mkdirSync(launchAgentsDir, { recursive: true });
+  const plistPath = join(launchAgentsDir, "com.felix.cmux-orbit.plist");
+  const repoRoot = resolve(import.meta.dir, "..");
+  const bunPath = process.execPath;
+  const logDir = join(home, ".local/state/cmux-orbit");
+  mkdirSync(logDir, { recursive: true });
+
+  const plistContent = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.felix.cmux-orbit</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${bunPath}</string>
+    <string>run</string>
+    <string>${join(repoRoot, "src/server/index.ts")}</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>${repoRoot}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PORT</key>
+    <string>${port}</string>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>${join(logDir, "orbit.out.log")}</string>
+  <key>StandardErrorPath</key>
+  <string>${join(logDir, "orbit.err.log")}</string>
+</dict>
+</plist>
+`;
+  writeFileSync(plistPath, plistContent, "utf8");
+  Bun.spawnSync(["launchctl", "unload", plistPath]);
+  const loadRes = Bun.spawnSync(["launchctl", "load", "-w", plistPath]);
+  const tsIp = detectTailscaleIp();
+  console.log(`✓ Installed & started launchd service: ${plistPath} (exit=${loadRes.exitCode})`);
+  console.log(`  Local URL : http://127.0.0.1:${port}`);
+  if (tsIp) {
+    console.log(`  iPhone URL: http://${tsIp}:${port}`);
+  }
+  process.exit(0);
+}
+
+if (subcmd === "uninstall-service") {
+  const plistPath = join(homedir(), "Library/LaunchAgents/com.felix.cmux-orbit.plist");
+  if (existsSync(plistPath)) {
+    Bun.spawnSync(["launchctl", "unload", plistPath]);
+    unlinkSync(plistPath);
+    console.log(`✓ Removed launchd service: ${plistPath}`);
+  } else {
+    console.log(`No launchd service found at ${plistPath}`);
+  }
+  process.exit(0);
+}
+
+// Default: start server
+const { startOrbitServer } = await import("../src/server/index");
+const tsIp = detectTailscaleIp();
+const { server } = startOrbitServer(port);
+console.log(`✦ cmux-orbit running on http://0.0.0.0:${server.port}`);
+if (tsIp) {
+  console.log(`  📱 iPhone Tailscale URL: http://${tsIp}:${server.port}`);
+}
