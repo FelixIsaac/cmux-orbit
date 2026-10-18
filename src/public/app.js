@@ -74,7 +74,7 @@ function hapticTick(style = "light") {
       });
       return;
     }
-    if (navigator.vibrate) navigator.vibrate(8);
+    if (navigator.vibrate) navigator.vibrate(style === "medium" ? 14 : 8);
   } catch {
     // ignore
   }
@@ -93,6 +93,7 @@ window.copyCodeSnippet = function (btn) {
   const code = wrapper ? wrapper.querySelector("code")?.innerText || "" : "";
   if (navigator.clipboard) {
     navigator.clipboard.writeText(code).then(() => {
+      hapticTick("medium");
       const orig = btn.innerText;
       btn.innerText = "✓ Copied";
       setTimeout(() => {
@@ -571,28 +572,48 @@ function renderMissionControl() {
         ${
           attentionList.length > 0 && (state.filter === "all" || state.filter === "needs_input")
             ? `
+          <div class="section-header" style="color:var(--status-amber);">⚡ ACTION REQUIRED (${attentionList.length})</div>
           ${attentionList
             .map(
               (item) => `
             <div class="attention-banner" data-open-ws="${item.workspaceId}" data-open-surf="${item.surfaceId}">
               <div class="attention-head">
-                <span>⚡ Needs Your Input</span>
-                <span>${escapeHtml(item.workspaceTitle)}</span>
+                <div class="attention-eyebrow">
+                  <span class="status-dot needs_input"></span>
+                  <span>Permission Request</span>
+                </div>
+                <span class="attention-tag">${escapeHtml(item.workspaceTitle)}</span>
               </div>
               <div class="attention-body">${escapeHtml(item.summary || item.surfaceTitle)}</div>
-              <div class="attention-meta">${escapeHtml(item.surfaceTitle)} · ${item.agentKind.toUpperCase()}</div>
-              <div style="display:flex;gap:8px;margin-top:6px;">
-                <button class="tui-btn primary" data-open-ws="${item.workspaceId}" data-open-surf="${item.surfaceId}">
-                  Respond →
+              <div class="attention-meta">
+                <span>${renderAgentBadge(item.agentKind)}</span>
+                <span>${escapeHtml(item.surfaceTitle)}</span>
+              </div>
+              <div class="attention-actions">
+                <button class="tui-btn primary" data-quick-key="1" data-ws="${item.workspaceId}" data-surf="${item.surfaceId}">
+                  ✓ Allow (1)
                 </button>
-                <button class="tui-btn secondary" data-quick-key="1" data-ws="${item.workspaceId}" data-surf="${item.surfaceId}">
-                  ✓ Yes (1)
+                <button class="tui-btn secondary" data-quick-key="escape" data-ws="${item.workspaceId}" data-surf="${item.surfaceId}">
+                  ✕ Deny (Esc)
+                </button>
+                <button class="tui-btn ghost" data-open-ws="${item.workspaceId}" data-open-surf="${item.surfaceId}">
+                  Inspect →
                 </button>
               </div>
             </div>
           `
             )
             .join("")}
+        `
+            : state.filter === "all"
+            ? `
+          <div class="zen-banner">
+            <div class="zen-left">
+              <span class="status-dot running"></span>
+              <span>All Systems Operational</span>
+            </div>
+            <span class="zen-sub">${dash.runningCount} active · ${dash.totalWorkspaces} workspaces</span>
+          </div>
         `
             : ""
         }
@@ -666,6 +687,7 @@ function renderSurfaceScreen() {
     ws?.surfaces?.find((s) => s.id === state.activeSurfaceId);
 
   const prompt = detail?.detectedPrompt;
+  const isRunning = surf?.state === "running";
 
   return `
     <div class="surface-screen" style="display:flex;flex-direction:column;height:100dvh;overflow:hidden;">
@@ -713,7 +735,10 @@ function renderSurfaceScreen() {
         ${renderSurfaceViewportContent(detail, surf, ws)}
       </main>
 
-      <button id="jump-bottom-btn" class="jump-bottom-btn" onclick="scrollToViewportBottom()">↓ Bottom</button>
+      <button id="jump-bottom-btn" class="jump-bottom-btn" onclick="scrollToViewportBottom()">
+        ${isRunning ? `<span class="status-dot running" style="width:6px;height:6px;"></span>` : ""}
+        ↓ Latest
+      </button>
 
       ${prompt ? renderTuiPromptDeck(prompt, ws?.id, surf?.id) : ""}
 
@@ -874,7 +899,7 @@ function renderSurfaceViewportContent(detail, surf, ws) {
               <details class="tool-call-row">
                 <summary class="tool-call-summary">
                   <span>💭 Reasoning</span>
-                  <span style="font-size:10px;">▾</span>
+                  <span class="chevron">▾</span>
                 </summary>
                 <div class="tool-call-body">${escapeHtml(m.thinking)}</div>
               </details>
@@ -888,12 +913,11 @@ function renderSurfaceViewportContent(detail, surf, ws) {
                       (tc) => `
                 <details class="tool-call-row">
                   <summary class="tool-call-summary">
-                    <span>⚡ ${escapeHtml(tc.name)}</span>
-                    <span style="font-size:10px;">▾</span>
+                    <span>⚡ ${escapeHtml(tc.name)}: ${escapeHtml(tc.summary || "")}</span>
+                    <span class="chevron">▾</span>
                   </summary>
                   <div class="tool-call-body">
-                    <div style="font-weight:600;margin-bottom:4px;color:var(--text-primary);">${escapeHtml(tc.summary)}</div>
-                    ${tc.output ? `<div>${escapeHtml(tc.output)}</div>` : ""}
+                    ${tc.output ? `<div>${escapeHtml(tc.output)}</div>` : `<div style="color:var(--text-muted);">Executed successfully.</div>`}
                   </div>
                 </details>
               `
@@ -981,14 +1005,14 @@ function renderModal() {
           </div>
           <div class="form-label">Process Signals</div>
           <div class="shortcut-grid">
-            <button class="shortcut-btn" data-send-key="ctrl+c">^C</button>
+            <button class="shortcut-btn" style="color:var(--status-coral);border-color:rgba(248,113,113,0.3);" data-send-key="ctrl+c">^C Kill</button>
             <button class="shortcut-btn" data-send-key="escape">Esc</button>
+            <button class="shortcut-btn" data-send-key="enter">↵ Return</button>
             <button class="shortcut-btn" data-send-key="tab">Tab</button>
             <button class="shortcut-btn" data-send-key="shift+tab">⇧Tab</button>
-            <button class="shortcut-btn" data-send-key="up">↑</button>
-            <button class="shortcut-btn" data-send-key="down">↓</button>
+            <button class="shortcut-btn" data-send-key="up">↑ Prev</button>
+            <button class="shortcut-btn" data-send-key="down">↓ Next</button>
             <button class="shortcut-btn" data-send-key="space">Space</button>
-            <button class="shortcut-btn" data-send-key="enter">↵ Enter</button>
           </div>
           <div class="form-label" style="margin-top:6px;">Agent Slash Commands</div>
           <div class="shortcut-grid">
@@ -1239,13 +1263,30 @@ function bindEvents() {
     });
   });
 
-  // Quick inline actions on Mission Control cards
+  // Quick inline actions on Mission Control cards with instant optimistic feedback
   document.querySelectorAll("[data-quick-key]").forEach((el) => {
     el.addEventListener("click", async (e) => {
       e.stopPropagation();
       const key = el.getAttribute("data-quick-key");
       const workspaceId = el.getAttribute("data-ws");
       const surfaceId = el.getAttribute("data-surf");
+      hapticTick("medium");
+
+      const banner = el.closest(".attention-banner");
+      if (banner) {
+        banner.querySelectorAll("button").forEach((b) => {
+          b.disabled = true;
+          b.style.opacity = "0.4";
+        });
+        el.style.opacity = "1";
+        el.textContent = "✓ Approved";
+        setTimeout(() => {
+          banner.style.transition = "transform 180ms ease, opacity 180ms ease";
+          banner.style.transform = "translateY(-8px) scale(0.97)";
+          banner.style.opacity = "0";
+        }, 160);
+      }
+
       await apiPost({ action: "answer_prompt", workspaceId, surfaceId, key });
     });
   });
@@ -1411,6 +1452,7 @@ function bindEvents() {
   document.querySelectorAll("[data-send-key]").forEach((el) => {
     el.addEventListener("click", async () => {
       const key = el.getAttribute("data-send-key");
+      hapticTick("medium");
       await apiPost({
         action: "send_key",
         workspaceId: state.activeWorkspaceId,
@@ -1424,7 +1466,7 @@ function bindEvents() {
 
   document.querySelectorAll("[data-insert-slash]").forEach((el) => {
     el.addEventListener("click", () => {
-      hapticTick();
+      hapticTick("light");
       const cmd = el.getAttribute("data-insert-slash");
       const ta = document.getElementById("composer-textarea");
       state.activeModal = null;
