@@ -42,7 +42,11 @@ const state = {
   openDetails: new Set(), // tracks open <details data-details-id="..."> keys across background updates
   draftsBySurface: {}, // surfaceId -> string draft
   scrollBySurface: {}, // surfaceId -> number scrollTop
+  scrollBySurfaceMode: {}, // `${surfaceId}:${mode}` -> number scrollTop
   viewModeBySurface: {}, // surfaceId -> string mode
+  optimisticTurnsBySurface: {}, // surfaceId -> Array<{ role, text, timestamp, isOptimistic }>
+  optimisticThinkingBySurface: {}, // surfaceId -> boolean
+  optimisticDismissedPromptKey: null, // key of prompt dismissed optimistically
   spawnForm: {
     target: "surface", // "surface" | "workspace"
     preset: "claude",
@@ -290,44 +294,257 @@ function ensureXtermMounted(rawAnsi) {
       try { fit.fit(); } catch {}
     }
 
-    // Natural 60fps mobile touch drag scrolling
+    // --- Optimistic Local Echo State ---
+    let optimisticEchoBuffer = "";
+    let optimisticAckTimer = null;
+
+    function isLocalEchoSafe() {
+      if (!activeTerminalInstance) return false;
+      if (activeTerminalInstance.buffer?.active?.type === "alternate") return false;
+      if (state.surfaceDetail?.isAlternateScreen) return false;
+      const mouseMode = activeTerminalInstance.modes?.mouseTrackingMode;
+      if (mouseMode && mouseMode !== "none") return false;
+      if (state.surfaceDetail?.hasMouseTracking) return false;
+      const recentText = state.surfaceDetail?.rawTerminalText || "";
+      const lastLine = recentText.trim().split("\n").pop() || "";
+      if (/(?:password|passphrase|token|secret)[:\?]\s*$/i.test(lastLine)) return false;
+      return true;
+    }
+
+    function handleOptimisticInput(data) {
+      if (!activeTerminalInstance || !isLocalEchoSafe()) return;
+      if (data === "\r") {
+        activeTerminalInstance.write("\r\n");
+        optimisticEchoBuffer = "";
+        return;
+      }
+      if (data === "\x7f" || data === "\b") {
+        if (optimisticEchoBuffer.length > 0) {
+          optimisticEchoBuffer = optimisticEchoBuffer.slice(0, -1);
+          activeTerminalInstance.write("\b \b");
+        }
+        return;
+      }
+      if (data === "\x03") {
+        activeTerminalInstance.write("^C\r\n");
+        optimisticEchoBuffer = "";
+        return;
+      }
+      if (/^[^\x00-\x1f\x7f-\x9f]+$/.test(data)) {
+        activeTerminalInstance.write(data);
+        optimisticEchoBuffer += data;
+        clearTimeout(optimisticAckTimer);
+        optimisticAckTimer = setTimeout(() => {
+          optimisticEchoBuffer = "";
+        }, 2000);
+      }
+    }
+
+    // --- TUI & Inertial Touch Scrolling Engine ---
+    let touchStartX = 0;
     let touchStartY = 0;
     let lastTouchY = 0;
+    let lastTouchTime = 0;
+    let touchVelocity = 0;
     let touchAccumulator = 0;
+    let inertiaAnimId = null;
+    let scrollIndicatorHideTimer = null;
+
+    let pendingTuiLines = 0;
+    let isTuiRpcInFlight = false;
+    let tuiDispatchTimer = null;
+    let lastTouchCol = 1;
+    let lastTouchRow = 1;
+
+    function updateScrollIndicator() {
+      let indicator = document.getElementById("xterm-scroll-indicator");
+      if (!indicator) {
+        indicator = document.createElement("div");
+        indicator.id = "xterm-scroll-indicator";
+        indicator.className = "xterm-scroll-indicator";
+        container.appendChild(indicator);
+      }
+      const buf = activeTerminalInstance?.buffer?.active;
+      if (!buf || buf.type === "alternate" || buf.baseY <= 0) {
+        indicator.classList.remove("visible");
+        return;
+      }
+      const containerHeight = container.clientHeight;
+      const totalRows = buf.baseY + activeTerminalInstance.rows;
+      const thumbHeight = Math.max(24, Math.round((activeTerminalInstance.rows / totalRows) * containerHeight));
+      const maxTop = containerHeight - thumbHeight;
+      const top = Math.round((buf.viewportY / buf.baseY) * maxTop);
+      indicator.style.height = `${thumbHeight}px`;
+      indicator.style.transform = `translateY(${top}px)`;
+      indicator.classList.add("visible");
+      clearTimeout(scrollIndicatorHideTimer);
+      scrollIndicatorHideTimer = setTimeout(() => {
+        indicator?.classList.remove("visible");
+      }, 800);
+    }
+
+    function queueTuiScroll(lines, touchX, touchY) {
+      if (!activeTerminalInstance || !state.activeSurfaceId || !state.activeWorkspaceId) return;
+      const rect = container.getBoundingClientRect();
+      const cellWidth = rect.width / (activeTerminalInstance.cols || 80);
+      const cellHeight = rect.height / (activeTerminalInstance.rows || 24);
+      lastTouchCol = Math.min(activeTerminalInstance.cols, Math.max(1, Math.floor((touchX - rect.left) / cellWidth) + 1));
+      lastTouchRow = Math.min(activeTerminalInstance.rows, Math.max(1, Math.floor((touchY - rect.top) / cellHeight) + 1));
+      pendingTuiLines += lines;
+
+      if (!tuiDispatchTimer && !isTuiRpcInFlight) {
+        tuiDispatchTimer = setTimeout(() => {
+          tuiDispatchTimer = null;
+          flushTuiScroll();
+        }, 35);
+      }
+    }
+
+    async function flushTuiScroll() {
+      if (isTuiRpcInFlight || pendingTuiLines === 0 || !state.activeSurfaceId) return;
+      const count = pendingTuiLines;
+      pendingTuiLines = 0;
+      isTuiRpcInFlight = true;
+      const mouseMode = activeTerminalInstance?.modes?.mouseTrackingMode;
+      const hasMouse = (mouseMode && mouseMode !== "none") || Boolean(state.surfaceDetail?.hasMouseTracking);
+
+      try {
+        let payload = "";
+        const clampedCount = Math.min(8, Math.abs(count));
+        if (hasMouse) {
+          const code = count > 0 ? 65 : 64; // SGR wheel down vs up
+          payload = `\x1b[<${code};${lastTouchCol};${lastTouchRow}M`.repeat(clampedCount);
+        } else {
+          const seq = count > 0 ? "\x1b[B" : "\x1b[A"; // DECSET 1007 arrows
+          payload = seq.repeat(clampedCount);
+        }
+        if (payload) {
+          await apiPost({
+            action: "send_prompt",
+            workspaceId: state.activeWorkspaceId,
+            surfaceId: state.activeSurfaceId,
+            text: payload,
+            submit: false,
+          });
+        }
+      } catch {} finally {
+        isTuiRpcInFlight = false;
+        if (pendingTuiLines !== 0) flushTuiScroll();
+      }
+    }
+
+    function startInertialScroll(initialVelocity) {
+      if (!activeTerminalInstance) return;
+      let vel = Math.max(-2.5, Math.min(2.5, initialVelocity));
+      let lastT = performance.now();
+      let acc = 0;
+      const rowH = 18;
+      const friction = 0.92;
+
+      function step(now) {
+        const dt = now - lastT;
+        lastT = now;
+        vel *= Math.pow(friction, dt / 16.67);
+        acc += vel * dt;
+        const lines = Math.trunc(acc / rowH);
+        if (lines !== 0) {
+          activeTerminalInstance.scrollLines(lines);
+          acc -= lines * rowH;
+          updateScrollIndicator();
+        }
+        if (Math.abs(vel) > 0.02) {
+          inertiaAnimId = requestAnimationFrame(step);
+        } else {
+          inertiaAnimId = null;
+        }
+      }
+      inertiaAnimId = requestAnimationFrame(step);
+    }
 
     container.addEventListener("touchstart", (e) => {
       if (e.touches.length === 1) {
+        if (inertiaAnimId) {
+          cancelAnimationFrame(inertiaAnimId);
+          inertiaAnimId = null;
+        }
+        touchStartX = e.touches[0].clientX;
         touchStartY = e.touches[0].clientY;
         lastTouchY = touchStartY;
+        lastTouchTime = performance.now();
+        touchVelocity = 0;
         touchAccumulator = 0;
       }
     }, { passive: true });
 
     container.addEventListener("touchmove", (e) => {
       if (e.touches.length === 1 && activeTerminalInstance) {
-        const currentY = e.touches[0].clientY;
+        const t = e.touches[0];
+        const currentY = t.clientY;
+        const now = performance.now();
+        const dt = now - lastTouchTime;
         const deltaY = lastTouchY - currentY;
+        if (dt > 0) {
+          const instantVel = deltaY / dt;
+          touchVelocity = 0.7 * instantVel + 0.3 * touchVelocity;
+        }
         lastTouchY = currentY;
+        lastTouchTime = now;
         touchAccumulator += deltaY;
         const rowHeight = 18;
         const linesToScroll = Math.trunc(touchAccumulator / rowHeight);
         if (linesToScroll !== 0) {
-          activeTerminalInstance.scrollLines(linesToScroll);
           touchAccumulator -= linesToScroll * rowHeight;
+          const isAlt = activeTerminalInstance.buffer?.active?.type === "alternate" || Boolean(state.surfaceDetail?.isAlternateScreen);
+          const mouseMode = activeTerminalInstance.modes?.mouseTrackingMode;
+          const hasMouse = (mouseMode && mouseMode !== "none") || Boolean(state.surfaceDetail?.hasMouseTracking);
+
+          if (isAlt || hasMouse) {
+            queueTuiScroll(linesToScroll, t.clientX, t.clientY);
+          } else {
+            activeTerminalInstance.scrollLines(linesToScroll);
+            updateScrollIndicator();
+          }
         }
       }
     }, { passive: true });
+
+    container.addEventListener("touchend", () => {
+      const isAlt = activeTerminalInstance?.buffer?.active?.type === "alternate" || Boolean(state.surfaceDetail?.isAlternateScreen);
+      const mouseMode = activeTerminalInstance?.modes?.mouseTrackingMode;
+      const hasMouse = (mouseMode && mouseMode !== "none") || Boolean(state.surfaceDetail?.hasMouseTracking);
+      if (!isAlt && !hasMouse && Math.abs(touchVelocity) > 0.15) {
+        startInertialScroll(touchVelocity);
+      }
+    }, { passive: true });
+
+    container.addEventListener("wheel", (e) => {
+      if (!activeTerminalInstance) return;
+      const isAlt = activeTerminalInstance.buffer?.active?.type === "alternate" || Boolean(state.surfaceDetail?.isAlternateScreen);
+      const mouseMode = activeTerminalInstance.modes?.mouseTrackingMode;
+      const hasMouse = (mouseMode && mouseMode !== "none") || Boolean(state.surfaceDetail?.hasMouseTracking);
+
+      if (isAlt || hasMouse) {
+        e.preventDefault();
+        const lines = e.deltaY > 0 ? 1 : -1;
+        queueTuiScroll(lines, e.clientX, e.clientY);
+      } else {
+        updateScrollIndicator();
+      }
+    }, { passive: false });
 
     // Tap to focus terminal & show mobile keyboard
     container.addEventListener("click", () => {
       if (activeTerminalInstance) {
         activeTerminalInstance.focus();
+        const helper = document.querySelector(".xterm-helper-textarea");
+        if (helper) helper.focus();
       }
     });
 
-    // Direct terminal typing from keyboard
+    // Direct terminal typing from keyboard with instant optimistic local echo
     term.onData(async (data) => {
       if (!state.activeSurfaceId || !state.activeWorkspaceId) return;
+      handleOptimisticInput(data);
       await apiPost({
         action: "send_prompt",
         workspaceId: state.activeWorkspaceId,
@@ -341,11 +558,8 @@ function ensureXtermMounted(rawAnsi) {
     activeTerminalFitAddon = fit;
     activeTerminalSurfaceId = state.activeSurfaceId;
 
-    window.addEventListener("resize", () => {
-      if (activeTerminalFitAddon) {
-        try { activeTerminalFitAddon.fit(); } catch {}
-      }
-    });
+    window.addEventListener("resize", syncTerminalViewportSize);
+    window.visualViewport?.addEventListener("resize", syncTerminalViewportSize);
   }
 
   // Update ANSI data
@@ -353,11 +567,49 @@ function ensureXtermMounted(rawAnsi) {
     activeTerminalInstance.clear();
     activeTerminalInstance.write(rawAnsi);
     lastTerminalAnsiRendered = rawAnsi;
-    activeTerminalInstance.scrollToBottom();
-    if (activeTerminalFitAddon) {
-      try { activeTerminalFitAddon.fit(); } catch {}
+
+    // Reconcile optimistic buffer against authoritative snapshot
+    if (optimisticEchoBuffer) {
+      const cleanText = state.surfaceDetail?.cleanTerminalText || state.surfaceDetail?.rawTerminalText || "";
+      if (cleanText.endsWith(optimisticEchoBuffer) || cleanText.includes(optimisticEchoBuffer)) {
+        optimisticEchoBuffer = "";
+      } else {
+        activeTerminalInstance.write(optimisticEchoBuffer);
+      }
     }
+
+    activeTerminalInstance.scrollToBottom();
+    updateScrollIndicator();
+    syncTerminalViewportSize();
   }
+}
+
+let resizeDebounceTimer = null;
+let lastReportedCols = 0;
+let lastReportedRows = 0;
+
+function syncTerminalViewportSize() {
+  if (!activeTerminalInstance || !activeTerminalFitAddon || state.viewMode !== "terminal") return;
+  try {
+    activeTerminalFitAddon.fit();
+    const cols = activeTerminalInstance.cols;
+    const rows = activeTerminalInstance.rows;
+    if (cols > 0 && rows > 0 && (cols !== lastReportedCols || rows !== lastReportedRows)) {
+      lastReportedCols = cols;
+      lastReportedRows = rows;
+      clearTimeout(resizeDebounceTimer);
+      resizeDebounceTimer = setTimeout(async () => {
+        if (!state.activeSurfaceId || !state.activeWorkspaceId) return;
+        await apiPost({
+          action: "resize_terminal",
+          workspaceId: state.activeWorkspaceId,
+          surfaceId: state.activeSurfaceId,
+          cols,
+          rows,
+        });
+      }, 150);
+    }
+  } catch {}
 }
 
 function disposeXterm() {
@@ -1167,44 +1419,42 @@ function renderSurfaceScreen() {
         ${prompt ? renderTuiPromptDeck(prompt, ws?.id, surf?.id) : ""}
       </div>
 
-      ${state.viewMode === "terminal" ? `
-        <footer class="terminal-dock" id="terminal-dock">
-          <div class="terminal-keys-row">
-            <button class="term-key-btn sigint" data-action="term-key" data-key="ctrl+c" title="Interrupt process (SIGINT)">^C</button>
-            <button class="term-key-btn" data-action="term-key" data-key="esc" title="Escape">Esc</button>
-            <button class="term-key-btn" data-action="term-key" data-key="tab" title="Tab Autocomplete">Tab</button>
-            <button class="term-key-btn accent" data-action="term-key" data-key="enter" title="Enter">↵</button>
-            <button class="term-key-btn" data-action="term-toggle-kb" title="Toggle Virtual Keyboard">⌨ Keyboard</button>
-            <button class="term-key-btn" data-action="term-clear" title="Clear Screen">Clear</button>
-            <button class="term-key-btn" data-action="term-copy" title="Copy Output">Copy</button>
-            <button class="term-key-btn" data-action="font-dec" title="Smaller font">A-</button>
-            <button class="term-key-btn" data-action="font-inc" title="Larger font">A+</button>
-          </div>
-        </footer>
-      ` : `
-        <footer class="composer-dock" id="composer-dock">
-          <div class="composer-shell">
-            <button class="composer-tool-btn" data-action="open-shortcuts" title="Signals & Shortcuts">···</button>
-            <button class="composer-tool-btn" data-action="toggle-composer-mode" title="Toggle Ask vs Shell" style="font-size:13px;font-family:var(--font-mono);font-weight:700;">
-              ${state.composerMode === "shell" ? "$" : "✦"}
-            </button>
-            <textarea
-              id="composer-textarea"
-              class="composer-input"
-              rows="1"
-              autocorrect="off"
-              autocapitalize="sentences"
-              spellcheck="true"
-              placeholder="${
-                state.composerMode === "shell"
-                  ? "Run shell command (! or raw)…"
-                  : `Message ${AGENT_META[surf?.agentKind]?.label || "surface"}…`
-              }"
-            >${escapeHtml(state.composerText)}</textarea>
-            <button class="composer-send-btn" data-action="submit-composer">↑</button>
-          </div>
-        </footer>
-      `}
+      <footer class="terminal-dock" id="terminal-dock" style="${state.viewMode === "terminal" ? "display:flex;" : "display:none;"}">
+        <div class="terminal-keys-row">
+          <button class="term-key-btn sigint" data-action="term-key" data-key="ctrl+c" title="Interrupt process (SIGINT)">^C</button>
+          <button class="term-key-btn" data-action="term-key" data-key="esc" title="Escape">Esc</button>
+          <button class="term-key-btn" data-action="term-key" data-key="tab" title="Tab Autocomplete">Tab</button>
+          <button class="term-key-btn accent" data-action="term-key" data-key="enter" title="Enter">↵</button>
+          <button class="term-key-btn" data-action="term-toggle-kb" title="Toggle Virtual Keyboard">⌨ Keyboard</button>
+          <button class="term-key-btn" data-action="term-clear" title="Clear Screen">Clear</button>
+          <button class="term-key-btn" data-action="term-copy" title="Copy Output">Copy</button>
+          <button class="term-key-btn" data-action="font-dec" title="Smaller font">A-</button>
+          <button class="term-key-btn" data-action="font-inc" title="Larger font">A+</button>
+        </div>
+      </footer>
+
+      <footer class="composer-dock" id="composer-dock" style="${state.viewMode === "terminal" ? "display:none;" : "display:block;"}">
+        <div class="composer-shell">
+          <button class="composer-tool-btn" data-action="open-shortcuts" title="Signals & Shortcuts">···</button>
+          <button class="composer-tool-btn" data-action="toggle-composer-mode" title="Toggle Ask vs Shell" style="font-size:13px;font-family:var(--font-mono);font-weight:700;">
+            ${state.composerMode === "shell" ? "$" : "✦"}
+          </button>
+          <textarea
+            id="composer-textarea"
+            class="composer-input"
+            rows="1"
+            autocorrect="off"
+            autocapitalize="sentences"
+            spellcheck="true"
+            placeholder="${
+              state.composerMode === "shell"
+                ? "Run shell command (! or raw)…"
+                : `Message ${AGENT_META[surf?.agentKind]?.label || "surface"}…`
+            }"
+          >${escapeHtml(state.composerText)}</textarea>
+          <button class="composer-send-btn" data-action="submit-composer">↑</button>
+        </div>
+      </footer>
     </div>
   `;
 }
@@ -1349,10 +1599,50 @@ function renderSurfaceViewportContent(detail, surf, ws) {
   }
 
   // Agent Dialogue Stream View
-  const messages = detail?.messages || [];
+  let messages = [...(detail?.messages || [])];
   const detectedFiles = detail?.detectedFiles || [];
   const liveSnippet = detail?.liveProseSnippet || "";
   const agentMeta = AGENT_META[surf?.agentKind] || AGENT_META.shell;
+
+  // Reconcile optimistic turns
+  const surfId = surf?.id || state.activeSurfaceId;
+  const pendingOptimistic = state.optimisticTurnsBySurface[surfId] || [];
+  if (pendingOptimistic.length > 0) {
+    const confirmedIndices = new Set();
+    for (let i = 0; i < pendingOptimistic.length; i++) {
+      const opt = pendingOptimistic[i];
+      const match = messages.some(
+        (m) => m.role === "user" && m.text.trim() === opt.text.trim()
+      );
+      if (match) {
+        confirmedIndices.add(i);
+      }
+    }
+    if (confirmedIndices.size > 0) {
+      state.optimisticTurnsBySurface[surfId] = pendingOptimistic.filter((_, i) => !confirmedIndices.has(i));
+    }
+    for (const opt of state.optimisticTurnsBySurface[surfId] || []) {
+      messages.push({
+        role: "user",
+        text: opt.text,
+        timestamp: opt.timestamp,
+        isOptimistic: true,
+      });
+    }
+  }
+
+  // If latest message is assistant with substantive content or tool calls, clear optimistic thinking
+  if (messages.length > 0) {
+    const lastMsg = messages[messages.length - 1];
+    if (lastMsg.role === "assistant" && (lastMsg.text || (lastMsg.toolCalls && lastMsg.toolCalls.length > 0))) {
+      state.optimisticThinkingBySurface[surfId] = false;
+    }
+  }
+
+  const isThinking =
+    Boolean(state.optimisticThinkingBySurface[surfId]) ||
+    surf?.state === "running" ||
+    (messages.length > 0 && messages[messages.length - 1].role === "user");
 
   return `
     ${
@@ -1371,7 +1661,7 @@ function renderSurfaceViewportContent(detail, surf, ws) {
     }
 
     ${
-      messages.length === 0
+      messages.length === 0 && !isThinking
         ? `
       <div class="turn-assistant">
         <div class="turn-author">
@@ -1386,7 +1676,7 @@ function renderSurfaceViewportContent(detail, surf, ws) {
         : messages
             .map((m, mIdx) => {
               if (m.role === "user") {
-                return `<div class="turn-user">${escapeHtml(m.text)}</div>`;
+                return `<div class="turn-user ${m.isOptimistic ? "turn-slide-in" : ""}">${escapeHtml(m.text)}</div>`;
               }
               const turnKey = m.timestamp ? m.timestamp.replace(/[^a-zA-Z0-9_-]/g, "_") : `turn-${mIdx}`;
               const reasoningKey = `reasoning-${turnKey}`;
@@ -1423,7 +1713,25 @@ function renderSurfaceViewportContent(detail, surf, ws) {
     }
 
     ${
-      messages.length === 0 && liveSnippet
+      isThinking
+        ? `
+      <div class="turn-assistant turn-slide-in optimistic-assistant-pulse">
+        <div class="turn-author">
+          <span>${agentMeta.icon} ${agentMeta.label}</span>
+          <span class="pulse-badge">Processing</span>
+        </div>
+        <div class="optimistic-thinking-wave">
+          <span class="thinking-dot"></span>
+          <span class="thinking-dot"></span>
+          <span class="thinking-dot"></span>
+        </div>
+      </div>
+    `
+        : ""
+    }
+
+    ${
+      messages.length === 0 && liveSnippet && !isThinking
         ? `
       <div class="workspace-card" style="margin-top:8px;">
         <div class="card-top" style="margin-bottom:4px;">
@@ -1431,16 +1739,6 @@ function renderSurfaceViewportContent(detail, surf, ws) {
           <button class="btn-icon" style="height:24px;font-size:11px;" data-mode="terminal">Full CLI →</button>
         </div>
         <pre class="terminal-box" style="min-height:auto;max-height:160px;margin:0;padding:8px;font-size:11.5px;">${renderTerminalAnsi(liveSnippet)}</pre>
-      </div>
-    `
-        : surf?.state === "running"
-        ? `
-      <div class="live-activity-bar">
-        <div class="live-activity-left">
-          <span class="status-dot running"></span>
-          <span>Agent executing tools & generation…</span>
-        </div>
-        <button class="btn-icon" data-mode="terminal" style="height:26px;font-size:11.5px;padding:0 8px;">&gt;_ CLI</button>
       </div>
     `
         : ""
@@ -2066,15 +2364,29 @@ function bindMissionEvents() {
       if (banner) {
         banner.querySelectorAll("button").forEach((b) => {
           b.disabled = true;
-          b.style.opacity = "0.4";
+          if (b !== el) b.classList.add("tui-btn-dismissed");
         });
-        el.style.opacity = "1";
-        el.textContent = "✓ Approved";
+        el.classList.add("approved");
+        el.innerHTML = `
+          <span class="checkmark-circle">
+            <svg class="checkmark-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+              <circle class="checkmark-ring" cx="12" cy="12" r="10" stroke="rgba(255,255,255,0.4)"/>
+              <path class="checkmark-stem" d="M8 12.5l2.5 2.5 5.5-5.5"/>
+            </svg>
+          </span>
+          <span>Approved</span>
+        `;
         setTimeout(() => {
-          banner.style.transition = "transform 180ms ease, opacity 180ms ease";
-          banner.style.transform = "translateY(-8px) scale(0.97)";
-          banner.style.opacity = "0";
-        }, 160);
+          banner.classList.add("banner-dismissing");
+          setTimeout(() => {
+            banner.remove();
+            if (state.dashboard?.attentionItems) {
+              state.dashboard.attentionItems = state.dashboard.attentionItems.filter(
+                (item) => item.surfaceId !== surfaceId
+              );
+            }
+          }, 280);
+        }, 320);
       }
 
       await apiPost({ action: "answer_prompt", workspaceId, surfaceId, key });
@@ -2177,17 +2489,7 @@ function bindSurfaceEvents() {
       if (m === "terminal" && state.viewMode === "terminal") {
         m = "agent";
       }
-      state.viewMode = m;
-      if (state.activeSurfaceId) {
-        state.viewModeBySurface[state.activeSurfaceId] = m;
-      }
-      if (m === "diff") {
-        const cwd =
-          state.surfaceDetail?.surface?.cwd ||
-          state.dashboard?.workspaces?.find((w) => w.id === state.activeWorkspaceId)?.cwd;
-        loadGitDiff(cwd);
-      }
-      render();
+      switchViewMode(m);
     });
   });
 
@@ -2200,17 +2502,16 @@ function bindSurfaceEvents() {
         holdTimer = setTimeout(() => {
           hapticTick();
           state.peekModePrev = state.viewMode;
-          state.viewMode = "terminal";
-          render();
+          switchViewMode("terminal");
         }, 260);
       }
     });
     const endHold = () => {
       if (holdTimer) clearTimeout(holdTimer);
       if (state.peekModePrev) {
-        state.viewMode = state.peekModePrev;
+        const prev = state.peekModePrev;
         state.peekModePrev = null;
-        render();
+        switchViewMode(prev);
       }
     };
     cliBtn.addEventListener("pointerup", endHold);
@@ -2220,9 +2521,75 @@ function bindSurfaceEvents() {
   bindTabsEvents();
   bindPromptEvents();
   bindViewportEvents();
-  if (state.viewMode === "terminal") {
+  bindTerminalDockEvents();
+  bindComposerEvents();
+}
+
+function switchViewMode(newMode) {
+  const surfId = state.activeSurfaceId;
+  const oldMode = state.viewMode;
+  if (oldMode === newMode && (newMode !== "terminal" || document.getElementById("xterm-container"))) return;
+
+  const vp = document.getElementById("surface-viewport");
+  if (vp && surfId) {
+    state.scrollBySurfaceMode[`${surfId}:${oldMode}`] = vp.scrollTop;
+  }
+
+  state.viewMode = newMode;
+  if (surfId) {
+    state.viewModeBySurface[surfId] = newMode;
+  }
+
+  // Update mode buttons active class
+  document.querySelectorAll("[data-mode]").forEach((btn) => {
+    const m = btn.getAttribute("data-mode");
+    if (m === "terminal") {
+      btn.classList.toggle("active", newMode === "terminal");
+    } else {
+      btn.classList.toggle("active", newMode === m);
+    }
+  });
+
+  if (newMode === "diff") {
+    const cwd =
+      state.surfaceDetail?.surface?.cwd ||
+      state.dashboard?.workspaces?.find((w) => w.id === state.activeWorkspaceId)?.cwd;
+    loadGitDiff(cwd);
+  }
+
+  // Update viewport class and content in-place
+  if (vp) {
+    vp.className =
+      newMode === "terminal"
+        ? "terminal-view"
+        : newMode === "diff"
+        ? "diff-view"
+        : "conversation-stream";
+    const ws = state.dashboard?.workspaces?.find((w) => w.id === state.activeWorkspaceId);
+    const surf = state.surfaceDetail?.surface || ws?.surfaces?.find((s) => s.id === surfId);
+    vp.innerHTML = renderSurfaceViewportContent(state.surfaceDetail, surf, ws);
+
+    // Restore scroll position for this surface & mode
+    const savedScroll = state.scrollBySurfaceMode[`${surfId}:${newMode}`];
+    if (savedScroll !== undefined) {
+      vp.scrollTop = savedScroll;
+    } else if (newMode !== "terminal") {
+      vp.scrollTop = vp.scrollHeight;
+    }
+  }
+
+  // Update footer docks
+  const termDock = document.getElementById("terminal-dock");
+  const compDock = document.getElementById("composer-dock");
+  if (newMode === "terminal") {
+    if (compDock) compDock.style.display = "none";
+    if (termDock) termDock.style.display = "flex";
     bindTerminalDockEvents();
+    const rawAnsi = state.surfaceDetail?.rawTerminalAnsi || state.surfaceDetail?.rawTerminalText || "";
+    ensureXtermMounted(rawAnsi);
   } else {
+    if (termDock) termDock.style.display = "none";
+    if (compDock) compDock.style.display = "block";
     bindComposerEvents();
   }
 }
@@ -2266,20 +2633,44 @@ function bindPromptEvents() {
       const surfaceId = el.getAttribute("data-surf");
       hapticTick("medium");
 
+      // Mark prompt optimistically dismissed so background poll doesn't resurrect it
+      state.optimisticDismissedPromptKey = `${surfaceId}:${key}`;
+      setTimeout(() => {
+        if (state.optimisticDismissedPromptKey === `${surfaceId}:${key}`) {
+          state.optimisticDismissedPromptKey = null;
+        }
+      }, 3000);
+
+      const promptDeck = dock.querySelector(".tui-prompt-dock") || dock;
       dock.querySelectorAll("button").forEach((b) => {
         b.disabled = true;
-        b.style.opacity = "0.45";
+        if (b !== el) {
+          b.classList.add("tui-btn-dismissed");
+        }
       });
-      el.style.opacity = "1";
-      el.innerHTML = "✓ " + el.innerHTML;
 
-      await apiPost({ action: "answer_prompt", workspaceId, surfaceId, key });
-      if (state.surfaceDetail?.detectedPrompt) {
-        state.surfaceDetail.detectedPrompt = null;
+      el.classList.add("approved");
+      el.innerHTML = `
+        <span class="checkmark-circle">
+          <svg class="checkmark-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+            <circle class="checkmark-ring" cx="12" cy="12" r="10" stroke="rgba(255,255,255,0.4)"/>
+            <path class="checkmark-stem" d="M8 12.5l2.5 2.5 5.5-5.5"/>
+          </svg>
+        </span>
+        <span>Approved</span>
+      `;
+
+      setTimeout(() => {
+        promptDeck.classList.add("prompt-deck-exit");
         setTimeout(() => {
           dock.innerHTML = "";
-        }, 220);
-      }
+          if (state.surfaceDetail?.detectedPrompt) {
+            state.surfaceDetail.detectedPrompt = null;
+          }
+        }, 280);
+      }, 320);
+
+      await apiPost({ action: "answer_prompt", workspaceId, surfaceId, key });
     });
   });
 }
@@ -2297,10 +2688,19 @@ function bindViewportEvents() {
     if (btn) btn.classList.toggle("visible", isUp);
   };
 
+  vp.addEventListener("click", (e) => {
+    if (e.target === vp || e.target.classList.contains("conversation-stream")) {
+      const activeEl = document.activeElement;
+      if (activeEl && (activeEl.tagName === "TEXTAREA" || activeEl.tagName === "INPUT")) {
+        activeEl.blur();
+      }
+    }
+  });
+
   vp.ontouchmove = () => {
-    const ta = document.getElementById("composer-textarea");
-    if (ta && document.activeElement === ta) {
-      ta.blur();
+    const activeEl = document.activeElement;
+    if (activeEl && (activeEl.tagName === "TEXTAREA" || activeEl.tagName === "INPUT")) {
+      activeEl.blur();
     }
   };
 
@@ -2680,29 +3080,65 @@ async function submitComposer() {
       ? `! ${raw}`
       : raw;
 
+  const surfId = state.activeSurfaceId;
+  const wsId = state.activeWorkspaceId;
+
   state.composerText = "";
-  if (state.activeSurfaceId) {
-    delete state.draftsBySurface[state.activeSurfaceId];
+  if (surfId) {
+    delete state.draftsBySurface[surfId];
   }
   if (ta) {
     ta.value = "";
     ta.style.height = "auto";
   }
 
-  // Optimistic feedback: append user turn immediately to stream
+  hapticTick("medium");
+
+  // Track optimistic turn in state so background polls preserve it
+  if (!state.optimisticTurnsBySurface[surfId]) {
+    state.optimisticTurnsBySurface[surfId] = [];
+  }
+  state.optimisticTurnsBySurface[surfId].push({
+    role: "user",
+    text: raw,
+    timestamp: new Date().toISOString(),
+    isOptimistic: true,
+  });
+  state.optimisticThinkingBySurface[surfId] = true;
+
+  // Optimistic feedback: append user turn & thinking wave immediately to stream (<16ms)
   const vp = document.getElementById("surface-viewport");
   if (vp && state.viewMode === "agent") {
+    const oldPulse = vp.querySelector(".optimistic-assistant-pulse");
+    if (oldPulse) oldPulse.remove();
+
     const userDiv = document.createElement("div");
-    userDiv.className = "turn-user";
+    userDiv.className = "turn-user turn-slide-in";
     userDiv.textContent = raw;
     vp.appendChild(userDiv);
+
+    const agentMeta = AGENT_META[state.surfaceDetail?.surface?.agentKind] || AGENT_META.shell;
+    const pulseDiv = document.createElement("div");
+    pulseDiv.className = "turn-assistant turn-slide-in optimistic-assistant-pulse";
+    pulseDiv.innerHTML = `
+      <div class="turn-author">
+        <span>${agentMeta.icon} ${agentMeta.label}</span>
+        <span class="pulse-badge">Processing</span>
+      </div>
+      <div class="optimistic-thinking-wave">
+        <span class="thinking-dot"></span>
+        <span class="thinking-dot"></span>
+        <span class="thinking-dot"></span>
+      </div>
+    `;
+    vp.appendChild(pulseDiv);
     vp.scrollTop = vp.scrollHeight;
   }
 
   await apiPost({
     action: "send_prompt",
-    workspaceId: state.activeWorkspaceId,
-    surfaceId: state.activeSurfaceId,
+    workspaceId: wsId,
+    surfaceId: surfId,
     text: textToSend,
     submit: true,
   });
@@ -2773,11 +3209,17 @@ function initNavigationState() {
 if (window.visualViewport) {
   const onViewportChange = () => {
     const vv = window.visualViewport;
-    const isKeyboardOpen = window.innerHeight - vv.height > 120;
+    const keyboardOffset = Math.max(0, window.innerHeight - (vv.height + (vv.offsetTop || 0)));
+    const isKeyboardOpen = keyboardOffset > 80;
+    document.documentElement.style.setProperty("--keyboard-offset", `${Math.round(keyboardOffset)}px`);
+    document.documentElement.style.setProperty("--visual-viewport-height", `${Math.round(vv.height)}px`);
     document.documentElement.style.setProperty(
       "--composer-safe-bottom",
       isKeyboardOpen ? "4px" : "env(safe-area-inset-bottom, 0px)"
     );
+    if (activeTerminalFitAddon && state.viewMode === "terminal") {
+      try { activeTerminalFitAddon.fit(); } catch {}
+    }
   };
   window.visualViewport.addEventListener("resize", onViewportChange);
   window.visualViewport.addEventListener("scroll", onViewportChange);

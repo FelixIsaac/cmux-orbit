@@ -29,6 +29,8 @@
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Geist", system-ui, sans-serif;
   --font-mono: "SF Mono", "Geist Mono", Menlo, Consolas, monospace;
 
+  --visual-viewport-height: 100dvh;
+  --keyboard-offset: 0px;
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --composer-safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -523,6 +525,17 @@ button:active,
   overflow: hidden;
   animation: attentionGlow 3s ease-in-out infinite alternate;
 }
+
+.attention-banner.banner-dismissing {
+  opacity: 0 !important;
+  transform: translateY(-8px) scale(0.98) !important;
+  max-height: 0 !important;
+  margin-bottom: 0 !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  overflow: hidden !important;
+  transition: all 280ms cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
 @keyframes attentionGlow {
   from { box-shadow: inset 0 1px 0 rgba(245, 158, 11, 0.35), 0 4px 18px rgba(245, 158, 11, 0.08); }
   to { box-shadow: inset 0 1px 0 rgba(245, 158, 11, 0.45), 0 8px 28px rgba(245, 158, 11, 0.2); }
@@ -703,11 +716,26 @@ button:active,
 /* Surface Dialogue / Conversation Stream */
 .conversation-stream {
   flex: 1;
-  padding: 14px 16px calc(var(--composer-safe-bottom) + 90px);
+  padding: 14px 16px calc(var(--keyboard-offset, 0px) + var(--composer-safe-bottom) + 90px);
   display: flex;
   flex-direction: column;
   gap: 16px;
   overflow-y: auto;
+}
+
+/* Smooth Turn Entrance Animation */
+@keyframes turnSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+.turn-slide-in {
+  animation: turnSlideIn 240ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 /* User Message Bubble */
@@ -731,6 +759,55 @@ button:active,
   flex-direction: column;
   gap: 10px;
   width: 100%;
+}
+
+/* Optimistic Assistant Thinking Pulse */
+.optimistic-assistant-pulse {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-md);
+  margin-top: 4px;
+}
+.pulse-badge {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--accent-blue);
+  background: rgba(56, 189, 248, 0.12);
+  padding: 2px 7px;
+  border-radius: 9999px;
+  border: 1px solid rgba(56, 189, 248, 0.25);
+}
+.optimistic-thinking-wave {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.thinking-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent-blue);
+  animation: thinkingWave 1.4s infinite ease-in-out both;
+}
+.thinking-dot:nth-child(1) { animation-delay: -0.32s; }
+.thinking-dot:nth-child(2) { animation-delay: -0.16s; }
+.thinking-dot:nth-child(3) { animation-delay: 0s; }
+
+@keyframes thinkingWave {
+  0%, 80%, 100% {
+    transform: scale(0.6);
+    opacity: 0.4;
+  }
+  40% {
+    transform: scale(1.2);
+    opacity: 1;
+  }
 }
 
 .turn-author {
@@ -950,7 +1027,7 @@ button:active,
 /* Interactive Floating TUI Approval Pill / Sheet */
 .tui-prompt-dock {
   position: fixed;
-  bottom: calc(var(--composer-safe-bottom) + 72px);
+  bottom: calc(var(--keyboard-offset, 0px) + var(--composer-safe-bottom) + 72px);
   left: 14px;
   right: 14px;
   max-width: 652px;
@@ -967,6 +1044,13 @@ button:active,
   gap: 10px;
   box-shadow: inset 0 1px 0 rgba(245, 158, 11, 0.35), 0 12px 36px rgba(0, 0, 0, 0.7);
   animation: promptFloatIn 200ms var(--ease-drawer);
+  transition: opacity 280ms cubic-bezier(0.16, 1, 0.3, 1), transform 280ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.tui-prompt-dock.prompt-deck-exit {
+  opacity: 0 !important;
+  transform: translateY(12px) scale(0.97) !important;
+  pointer-events: none;
 }
 
 @keyframes promptFloatIn {
@@ -1005,6 +1089,7 @@ button:active,
   align-items: center;
   justify-content: center;
   white-space: nowrap;
+  transition: all 180ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .tui-btn.primary {
@@ -1031,10 +1116,58 @@ button:active,
   border: 1px solid rgba(239, 68, 68, 0.35);
 }
 
+.tui-btn.approved {
+  background: var(--color-success, #22C55E) !important;
+  border-color: var(--color-success, #22C55E) !important;
+  color: #ffffff !important;
+  transform: scale(1.02);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tui-btn-dismissed {
+  opacity: 0.35 !important;
+  pointer-events: none !important;
+}
+
+.checkmark-circle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+}
+
+.checkmark-svg {
+  width: 14px;
+  height: 14px;
+}
+
+.checkmark-ring {
+  stroke-dasharray: 44;
+  stroke-dashoffset: 44;
+  animation: checkRing 250ms ease forwards;
+}
+
+.checkmark-stem {
+  stroke-dasharray: 18;
+  stroke-dashoffset: 18;
+  animation: checkStem 220ms 120ms ease forwards;
+}
+
+@keyframes checkRing {
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes checkStem {
+  to { stroke-dashoffset: 0; }
+}
+
 /* Floating Clean Composer Dock */
 .composer-dock {
   position: fixed;
-  bottom: 0;
+  bottom: var(--keyboard-offset, 0px);
   left: 0;
   right: 0;
   z-index: 35;
@@ -1043,6 +1176,7 @@ button:active,
   -webkit-backdrop-filter: blur(24px) saturate(180%);
   padding: 12px 14px calc(var(--composer-safe-bottom) + 12px);
   pointer-events: none;
+  transition: bottom 120ms ease-out;
 }
 
 .composer-shell {
@@ -1126,7 +1260,7 @@ button:active,
 /* Floating Jump to Bottom Button */
 .jump-bottom-btn {
   position: fixed;
-  bottom: calc(var(--composer-safe-bottom) + 72px);
+  bottom: calc(var(--keyboard-offset, 0px) + var(--composer-safe-bottom) + 72px);
   right: 18px;
   z-index: 38;
   height: 34px;
@@ -1168,14 +1302,33 @@ button:active,
 }
 
 .xterm-fullscreen-container {
+  position: relative;
   flex: 1;
   width: 100%;
   height: 100%;
   background: #000000;
-  padding: 6px 8px calc(var(--safe-bottom) + 52px) 8px;
+  padding: 6px 8px calc(var(--keyboard-offset, 0px) + var(--safe-bottom) + 52px) 8px;
   overflow: hidden;
   box-sizing: border-box;
   touch-action: pan-y;
+}
+
+/* Sleek Custom Scrollbar Pill for Inertial Scrolling */
+.xterm-scroll-indicator {
+  position: absolute;
+  top: 0;
+  right: 2px;
+  width: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.38);
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(0);
+  transition: opacity 0.22s ease-out;
+  z-index: 15;
+}
+.xterm-scroll-indicator.visible {
+  opacity: 1;
 }
 
 .xterm-fullscreen-container .xterm {
@@ -1237,7 +1390,7 @@ button:active,
 /* Lean, Authentic Terminal Accessory Dock */
 .terminal-dock {
   position: fixed;
-  bottom: 0;
+  bottom: var(--keyboard-offset, 0px);
   left: 0;
   right: 0;
   z-index: 100;
@@ -1250,6 +1403,7 @@ button:active,
   flex-direction: row;
   align-items: center;
   box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.6);
+  transition: bottom 120ms ease-out;
 }
 
 .terminal-keys-row {

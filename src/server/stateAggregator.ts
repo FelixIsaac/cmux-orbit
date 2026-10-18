@@ -99,6 +99,8 @@ export interface OrbitSurfaceDetail {
     content: string;
     modifiedAt: string;
   } | null;
+  isAlternateScreen?: boolean;
+  hasMouseTracking?: boolean;
 }
 
 export interface VaultSessionEntry {
@@ -447,6 +449,8 @@ export async function getSurfaceDetail(
   // Case 2: Terminal / Agent surface
   let rawTerminalText = "";
   let rawTerminalAnsi = "";
+  let isAlternateScreen = false;
+  let hasMouseTracking = false;
 
   try {
     const replayRes = await cmuxRpc<{ render_grid?: any }>(
@@ -455,6 +459,15 @@ export async function getSurfaceDetail(
       2500
     );
     if (replayRes?.render_grid) {
+      isAlternateScreen = replayRes.render_grid.active_screen === "alternate";
+      hasMouseTracking =
+        Array.isArray(replayRes.render_grid.modes) &&
+        replayRes.render_grid.modes.some(
+          (m: any) =>
+            !m.ansi &&
+            (m.code === 1000 || m.code === 1002 || m.code === 1003 || m.code === 1006) &&
+            m.on
+        );
       const result = renderGridToAnsiAndPlain(replayRes.render_grid, 180);
       rawTerminalAnsi = result.ansi;
       if (result.plainText) {
@@ -557,5 +570,7 @@ export async function getSurfaceDetail(
     telemetry: analysis.telemetry,
     detectedFiles: analysis.detectedFiles,
     markdownDocument: null,
+    isAlternateScreen,
+    hasMouseTracking,
   };
 }

@@ -328,6 +328,30 @@ export function startOrbitServer(port = Number(process.env.PORT || 4400)) {
             return jsonResponse({ ok: true });
           }
 
+          if (action === "resize_terminal" || action === "resize") {
+            const { surfaceId, cols, rows } = body;
+            if (!surfaceId || !cols || !rows) {
+              return jsonResponse({ ok: false, error: "surfaceId, cols, and rows required" }, 400);
+            }
+            await enqueueSurfaceAction(surfaceId, async () => {
+              try {
+                await cmuxRpc("terminal.size_policy.set", {
+                  surface_id: surfaceId,
+                  mode: "fixed",
+                  fixed_cols: Number(cols),
+                  fixed_rows: Number(rows),
+                });
+              } catch {
+                await cmuxRpc("mobile.terminal.viewport", {
+                  surface_id: surfaceId,
+                  columns: Number(cols),
+                  rows: Number(rows),
+                }).catch(() => null);
+              }
+            });
+            return jsonResponse({ ok: true });
+          }
+
           if (action === "answer_prompt") {
             const { workspaceId, surfaceId, key, submit = true } = body;
             if (!workspaceId || !surfaceId || !key) {
