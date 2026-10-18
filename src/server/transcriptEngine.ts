@@ -150,16 +150,48 @@ export function resolveTranscriptPath(
     // ignore
   }
 
-  // 2. Check ~/.grok/sessions/*/<sessionId>/chat_history.jsonl
+  // 2. Check ~/.grok/sessions/*/<sessionId>/updates.jsonl or chat_history.jsonl
   try {
     const grokSessions = join(HOME, ".grok/sessions");
     if (existsSync(grokSessions)) {
       for (const dir of readdirSync(grokSessions)) {
-        const candidate = join(grokSessions, dir, sessionId, "chat_history.jsonl");
-        if (existsSync(candidate)) {
-          transcriptPathCache.set(sessionId, candidate);
-          return candidate;
+        const candidate1 = join(grokSessions, dir, sessionId, "updates.jsonl");
+        const candidate2 = join(grokSessions, dir, sessionId, "chat_history.jsonl");
+        if (existsSync(candidate1)) {
+          transcriptPathCache.set(sessionId, candidate1);
+          return candidate1;
         }
+        if (existsSync(candidate2)) {
+          transcriptPathCache.set(sessionId, candidate2);
+          return candidate2;
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  // 2b. Check ~/.codex/sessions/**/<sessionId>*.jsonl
+  try {
+    const codexSessions = join(HOME, ".codex/sessions");
+    if (existsSync(codexSessions)) {
+      const walk = (d: string, depth = 0): string | null => {
+        if (depth > 4) return null;
+        for (const ent of readdirSync(d, { withFileTypes: true })) {
+          const full = join(d, ent.name);
+          if (ent.isDirectory()) {
+            const found = walk(full, depth + 1);
+            if (found) return found;
+          } else if (ent.isFile() && ent.name.includes(sessionId) && ent.name.endsWith(".jsonl")) {
+            return full;
+          }
+        }
+        return null;
+      };
+      const found = walk(codexSessions);
+      if (found) {
+        transcriptPathCache.set(sessionId, found);
+        return found;
       }
     }
   } catch {
@@ -201,6 +233,32 @@ export function resolveTranscriptPath(
     // ignore
   }
 
+  return null;
+}
+
+const AGY_HISTORY_FILE = join(HOME, ".gemini/antigravity-cli/history.jsonl");
+
+/**
+ * Looks up the latest Antigravity session ID for a given working directory.
+ */
+export function getLatestAntigravitySessionId(cwd: string): string | null {
+  try {
+    if (!existsSync(AGY_HISTORY_FILE)) return null;
+    const lines = readFileSync(AGY_HISTORY_FILE, "utf8").trim().split("\n");
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      try {
+        const parsed = JSON.parse(line);
+        if (
+          parsed.conversationId &&
+          (parsed.workspace === cwd || cwd.startsWith(parsed.workspace) || parsed.workspace.startsWith(cwd))
+        ) {
+          return parsed.conversationId;
+        }
+      } catch {}
+    }
+  } catch {}
   return null;
 }
 

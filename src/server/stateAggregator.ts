@@ -6,6 +6,7 @@ import {
 } from "./screenAnalyzer";
 import { renderGridToAnsiAndPlain } from "./terminalAnsi";
 import {
+  getLatestAntigravitySessionId,
   loadHookSessions,
   parseTranscriptFile,
   resolveTranscriptPath,
@@ -59,6 +60,7 @@ export interface OrbitWorkspaceSummary {
 
 export interface OrbitDashboardSnapshot {
   timestamp: string;
+  stateHash?: string;
   hostName: string;
   totalWorkspaces: number;
   totalSurfaces: number;
@@ -252,7 +254,11 @@ async function _buildDashboardSnapshotInternal(): Promise<OrbitDashboardSnapshot
         currAgent?.kind || hookMeta?.agentKind || termInfo?.agent_source || null;
 
       const agentKind = inferAgentBrand(rs.kind || "terminal", rs.title || "", explicitAgentKind);
-      const sessionId = currAgent?.session_id || hookMeta?.sessionId;
+      const surfCwd = currItem?.cwd || termInfo?.current_directory || hookMeta?.cwd || wsCwd;
+      let sessionId = currAgent?.session_id || hookMeta?.sessionId;
+      if (!sessionId && agentKind === "antigravity") {
+        sessionId = getLatestAntigravitySessionId(surfCwd) || undefined;
+      }
 
       // Determine lifecycle state
       const obligations: any[] = currItem?.possible_human_obligations || [];
@@ -371,8 +377,11 @@ async function _buildDashboardSnapshotInternal(): Promise<OrbitDashboardSnapshot
   );
   const unreadCount = workspaces.filter((w) => w.hasUnread || w.unreadCount > 0 || w.state === "unread").length;
 
-  return {
+  const stateHash = `${workspaces.length}:${totalSurfaces}:${needsInputCount}:${runningCount}:${unreadCount}:${attentionItems.map((a) => `${a.surfaceId}:${a.state}`).join(",")}`;
+
+  const snapshot: OrbitDashboardSnapshot = {
     timestamp: new Date().toISOString(),
+    stateHash,
     hostName: "felixs-helm",
     totalWorkspaces: workspaces.length,
     totalSurfaces,
@@ -383,7 +392,14 @@ async function _buildDashboardSnapshotInternal(): Promise<OrbitDashboardSnapshot
     workspaces,
     recentDirectories: listRecentDirectories(workspaces.map((w) => w.cwd)),
   };
+
+  cachedDashboardSnapshot = snapshot;
+  cachedDashboardTimestamp = Date.now();
+  return snapshot;
 }
+
+let cachedDashboardSnapshot: OrbitDashboardSnapshot | null = null;
+let cachedDashboardTimestamp = 0;
 
 /**
  * Loads full detail for a specific surface (structured agent conversation + live screen analysis + markdown file if applicable).
@@ -392,7 +408,10 @@ export async function getSurfaceDetail(
   workspaceId: string,
   surfaceId: string
 ): Promise<OrbitSurfaceDetail> {
-  const snapshot = await buildDashboardSnapshot();
+  let snapshot = cachedDashboardSnapshot;
+  if (!snapshot || Date.now() - cachedDashboardTimestamp > 2500) {
+    snapshot = await buildDashboardSnapshot();
+  }
   const ws =
     snapshot.workspaces.find((w) => w.id === workspaceId) ||
     snapshot.workspaces.find((w) => w.surfaces.some((s) => s.id === surfaceId));
@@ -509,7 +528,7 @@ export async function getSurfaceDetail(
   }
 
   const messages = transcriptPath
-    ? parseTranscriptFile(transcriptPath, surf.agentKind, 60)
+    ? parseTranscriptFile(transcriptPath, surf.agentKind, 35)
     : [];
 
   // If no JSONL messages were found but hookMeta has a lastBody summary, synthesize an initial card

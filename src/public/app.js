@@ -21,6 +21,10 @@ const state = {
   filter: "all", // "all" | "needs_input" | "active" | "vault"
   dashboard: loadCachedDashboard(),
   dashboardJson: null,
+  dashboardHash: null,
+  missionSearch: "",
+  showAllIdle: false,
+  surfacePickerSearch: "",
   activeWorkspaceId: null,
   activeSurfaceId: null,
   surfaceDetail: null,
@@ -201,6 +205,24 @@ let activeTerminalInstance = null;
 let activeTerminalFitAddon = null;
 let activeTerminalSurfaceId = null;
 let lastTerminalAnsiRendered = null;
+let lastScrolledSurfaceId = null;
+
+function ensureActiveTabVisible() {
+  const tabsContainer = document.getElementById("surface-tabs-container");
+  const activeTab = tabsContainer?.querySelector(".surface-tab.active");
+  if (!tabsContainer || !activeTab) return;
+
+  if (state.activeSurfaceId === lastScrolledSurfaceId) return;
+  lastScrolledSurfaceId = state.activeSurfaceId;
+
+  const cRect = tabsContainer.getBoundingClientRect();
+  const tRect = activeTab.getBoundingClientRect();
+  // Only scroll if tab is actually outside or partially hidden
+  if (tRect.left < cRect.left || tRect.right > cRect.right) {
+    const offset = tRect.left - cRect.left - (cRect.width - tRect.width) / 2;
+    tabsContainer.scrollLeft += offset; // Instant, zero smooth animation jitter
+  }
+}
 
 function ensureXtermMounted(rawAnsi) {
   const container = document.getElementById("xterm-container");
@@ -252,7 +274,7 @@ function ensureXtermMounted(rawAnsi) {
         brightCyan: "#89DCEB",
         brightWhite: "#BAC2DE",
       },
-      scrollback: 2500,
+      scrollback: 800,
       disableStdin: false,
     });
 
@@ -267,6 +289,41 @@ function ensureXtermMounted(rawAnsi) {
     if (fit) {
       try { fit.fit(); } catch {}
     }
+
+    // Natural 60fps mobile touch drag scrolling
+    let touchStartY = 0;
+    let lastTouchY = 0;
+    let touchAccumulator = 0;
+
+    container.addEventListener("touchstart", (e) => {
+      if (e.touches.length === 1) {
+        touchStartY = e.touches[0].clientY;
+        lastTouchY = touchStartY;
+        touchAccumulator = 0;
+      }
+    }, { passive: true });
+
+    container.addEventListener("touchmove", (e) => {
+      if (e.touches.length === 1 && activeTerminalInstance) {
+        const currentY = e.touches[0].clientY;
+        const deltaY = lastTouchY - currentY;
+        lastTouchY = currentY;
+        touchAccumulator += deltaY;
+        const rowHeight = 18;
+        const linesToScroll = Math.trunc(touchAccumulator / rowHeight);
+        if (linesToScroll !== 0) {
+          activeTerminalInstance.scrollLines(linesToScroll);
+          touchAccumulator -= linesToScroll * rowHeight;
+        }
+      }
+    }, { passive: true });
+
+    // Tap to focus terminal & show mobile keyboard
+    container.addEventListener("click", () => {
+      if (activeTerminalInstance) {
+        activeTerminalInstance.focus();
+      }
+    });
 
     // Direct terminal typing from keyboard
     term.onData(async (data) => {
@@ -456,15 +513,18 @@ function connectWebSocket() {
     try {
       const msg = JSON.parse(event.data);
       if (msg.type === "dashboard" && msg.data) {
-        const json = JSON.stringify(msg.data);
-        if (json === state.dashboardJson) {
+        if (msg.data.stateHash && msg.data.stateHash === state.dashboardHash) {
           return;
         }
-        state.dashboardJson = json;
+        state.dashboardHash = msg.data.stateHash;
         state.dashboard = msg.data;
         saveCachedDashboard(msg.data);
 
         if (state.screen === "mission") {
+          const mSearchInp = document.getElementById("mission-search-input");
+          const hadSearchFocus = document.activeElement === mSearchInp;
+          const searchVal = mSearchInp ? mSearchInp.value : null;
+
           const vaultInp = document.getElementById("vault-search-input");
           const hadVaultFocus = document.activeElement === vaultInp;
           const vaultVal = vaultInp ? vaultInp.value : null;
@@ -475,7 +535,13 @@ function connectWebSocket() {
             bindMissionEvents();
           }
 
-          if (hadVaultFocus) {
+          if (hadSearchFocus) {
+            const nextInp = document.getElementById("mission-search-input");
+            if (nextInp) {
+              if (searchVal !== null) nextInp.value = searchVal;
+              nextInp.focus();
+            }
+          } else if (hadVaultFocus) {
             const nextInp = document.getElementById("vault-search-input");
             if (nextInp) {
               if (vaultVal !== null) nextInp.value = vaultVal;
@@ -786,6 +852,17 @@ function renderMissionControl() {
 
   const attentionList = dash.attentionItems || [];
   let workspaces = dash.workspaces || [];
+
+  if (state.missionSearch) {
+    const q = state.missionSearch.toLowerCase();
+    workspaces = workspaces.filter(
+      (w) =>
+        w.title.toLowerCase().includes(q) ||
+        w.cwd.toLowerCase().includes(q) ||
+        w.surfaces.some((s) => s.title.toLowerCase().includes(q))
+    );
+  }
+
   if (state.filter === "needs_input") {
     workspaces = workspaces.filter((w) => w.state === "needs_input");
   } else if (state.filter === "active") {
@@ -793,6 +870,14 @@ function renderMissionControl() {
       (w) => w.state === "running" || w.state === "unread" || w.hasUnread
     );
   }
+
+  // Triage separation for high scale (e.g. 50 workspaces)
+  const activeWorkspaces = workspaces.filter(
+    (w) => w.state === "running" || w.state === "unread" || w.hasUnread || w.isPinned
+  );
+  const idleWorkspaces = workspaces.filter(
+    (w) => !w.isPinned && w.state !== "running" && w.state !== "unread" && !w.hasUnread && w.state !== "needs_input"
+  );
 
   return `
     <div id="mission-screen" style="display:flex;flex-direction:column;min-height:100dvh;">
@@ -830,6 +915,16 @@ function renderMissionControl() {
           state.filter === "vault"
             ? renderVaultView()
             : `
+          <div class="mission-search-row">
+            <input
+              id="mission-search-input"
+              class="mission-search-input"
+              type="search"
+              placeholder="Search workspaces, repos, agents…"
+              value="${escapeHtml(state.missionSearch)}"
+            />
+          </div>
+
           ${
             attentionList.length > 0 && (state.filter === "all" || state.filter === "needs_input")
               ? `
@@ -866,7 +961,7 @@ function renderMissionControl() {
               )
               .join("")}
           `
-              : state.filter === "all"
+              : state.filter === "all" && !state.missionSearch
               ? `
             <div class="zen-banner">
               <div class="zen-left">
@@ -879,29 +974,65 @@ function renderMissionControl() {
               : ""
           }
 
-          <div class="section-header">Workspaces</div>
+          ${
+            activeWorkspaces.length > 0 && state.filter === "all"
+              ? `
+            <div class="section-header">Active &amp; Pinned (${activeWorkspaces.length})</div>
+            ${activeWorkspaces
+              .map((ws) => renderWorkspaceCard(ws))
+              .join("")}
+          `
+              : ""
+          }
 
-          ${workspaces
-            .map((ws) => {
-              const primarySurf = ws.surfaces.find((s) => s.isFocused) || ws.surfaces[0];
-              return `
-              <div class="workspace-card" data-open-ws="${ws.id}" data-open-surf="${primarySurf?.id || ""}">
-                <div class="card-top">
-                  <div class="ws-title-row">
-                    <span class="status-dot ${ws.state}"></span>
-                    <span class="ws-title">${escapeHtml(ws.title)}</span>
-                  </div>
-                  <span class="tab-badge">${ws.surfaces.length} tab${ws.surfaces.length === 1 ? "" : "s"}</span>
-                </div>
-                <div class="card-cwd">${escapeHtml(shortenPath(ws.cwd))}</div>
-                ${ws.preview ? `<div class="card-snippet">${escapeHtml(ws.preview)}</div>` : ""}
-              </div>
-            `;
-            })
-            .join("")}
+          ${
+            state.filter === "all"
+              ? `
+            ${idleWorkspaces.length > 0 ? `<div class="section-header">Workspaces (${idleWorkspaces.length})</div>` : ""}
+            ${
+              idleWorkspaces.length > 6 && !state.showAllIdle && !state.missionSearch
+                ? `
+                ${idleWorkspaces.slice(0, 4).map((ws) => renderWorkspaceCard(ws)).join("")}
+                <button class="idle-accordion-btn" data-action="toggle-idle-workspaces">
+                  <span>Show ${idleWorkspaces.length - 4} More Idle Workspaces</span>
+                  <span>▾</span>
+                </button>
+              `
+                : idleWorkspaces.map((ws) => renderWorkspaceCard(ws)).join("")
+            }
+            ${
+              idleWorkspaces.length > 6 && state.showAllIdle && !state.missionSearch
+                ? `
+                <button class="idle-accordion-btn" data-action="toggle-idle-workspaces" style="margin-top:6px;">
+                  <span>Collapse Idle Workspaces</span>
+                  <span>▴</span>
+                </button>
+              `
+                : ""
+            }
+          `
+              : workspaces.map((ws) => renderWorkspaceCard(ws)).join("")
+          }
         `
         }
       </main>
+    </div>
+  `;
+}
+
+function renderWorkspaceCard(ws) {
+  const primarySurf = ws.surfaces.find((s) => s.isFocused) || ws.surfaces[0];
+  return `
+    <div class="workspace-card" data-open-ws="${ws.id}" data-open-surf="${primarySurf?.id || ""}">
+      <div class="card-top">
+        <div class="ws-title-row">
+          <span class="status-dot ${ws.state}"></span>
+          <span class="ws-title">${escapeHtml(ws.title)}</span>
+        </div>
+        <span class="tab-badge">${ws.surfaces.length} tab${ws.surfaces.length === 1 ? "" : "s"}</span>
+      </div>
+      <div class="card-cwd">${escapeHtml(shortenPath(ws.cwd))}</div>
+      ${ws.preview ? `<div class="card-snippet">${escapeHtml(ws.preview)}</div>` : ""}
     </div>
   `;
 }
@@ -938,6 +1069,27 @@ function renderVaultView() {
 
 function renderSurfaceTabs(ws) {
   if (!ws || !ws.surfaces || ws.surfaces.length <= 1) return "";
+
+  // Rule of 6: For workspaces with > 6 surfaces, provide compact picker pill
+  if (ws.surfaces.length > 6) {
+    const activeSurf = ws.surfaces.find((s) => s.id === state.activeSurfaceId) || ws.surfaces[0];
+    const meta = AGENT_META[activeSurf.agentKind] || AGENT_META.shell;
+    const needsInputCount = ws.surfaces.filter((s) => s.state === "needs_input").length;
+    const runningCount = ws.surfaces.filter((s) => s.state === "running").length;
+
+    return `
+      <button class="surface-tab active" data-open-ws="${ws.id}" data-open-surf="${activeSurf.id}">
+        <span class="status-dot ${activeSurf.state}"></span>
+        <span>${meta.icon}</span>
+        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(activeSurf.title)}</span>
+      </button>
+      <button class="surface-tab" data-action="open-surface-picker" style="font-weight:600;border-color:rgba(56,189,248,0.35);color:var(--accent-blue);">
+        ⊞ ${ws.surfaces.length} Tabs ▾${needsInputCount > 0 ? ` <span class="status-dot needs_input" style="width:6px;height:6px;"></span>` : runningCount > 0 ? ` <span class="status-dot running" style="width:6px;height:6px;"></span>` : ""}
+      </button>
+      <button class="surface-tab" data-action="open-spawn" data-target="surface">+ Tab</button>
+    `;
+  }
+
   return `
     ${ws.surfaces
       .map((s) => {
@@ -1021,28 +1173,13 @@ function renderSurfaceScreen() {
             <button class="term-key-btn sigint" data-action="term-key" data-key="ctrl+c" title="Interrupt process (SIGINT)">^C</button>
             <button class="term-key-btn" data-action="term-key" data-key="esc" title="Escape">Esc</button>
             <button class="term-key-btn" data-action="term-key" data-key="tab" title="Tab Autocomplete">Tab</button>
-            <button class="term-key-btn" data-action="term-key" data-key="up" title="Previous Command">↑</button>
-            <button class="term-key-btn" data-action="term-key" data-key="down" title="Next Command">↓</button>
-            <button class="term-key-btn" data-action="term-key" data-key="enter" title="Enter">↵</button>
+            <button class="term-key-btn accent" data-action="term-key" data-key="enter" title="Enter">↵</button>
+            <button class="term-key-btn" data-action="term-toggle-kb" title="Toggle Virtual Keyboard">⌨ Keyboard</button>
             <button class="term-key-btn" data-action="term-clear" title="Clear Screen">Clear</button>
             <button class="term-key-btn" data-action="term-copy" title="Copy Output">Copy</button>
             <button class="term-key-btn" data-action="font-dec" title="Smaller font">A-</button>
             <button class="term-key-btn" data-action="font-inc" title="Larger font">A+</button>
           </div>
-          <form id="terminal-command-form" class="terminal-command-row">
-            <span class="terminal-prompt-glyph">$</span>
-            <input
-              type="text"
-              id="terminal-command-input"
-              class="terminal-command-input"
-              placeholder="Type shell command (e.g. ls -la, git status, cargo test)…"
-              autocomplete="off"
-              autocorrect="off"
-              autocapitalize="none"
-              spellcheck="false"
-            />
-            <button type="submit" class="terminal-send-btn" id="terminal-send-btn">↵ Run</button>
-          </form>
         </footer>
       ` : `
         <footer class="composer-dock" id="composer-dock">
@@ -1498,6 +1635,42 @@ function renderModal() {
     `;
   }
 
+  if (state.activeModal === "surface_picker") {
+    const ws = state.dashboard?.workspaces?.find((w) => w.id === state.activeWorkspaceId);
+    const surfaces = ws?.surfaces || [];
+    return `
+      <div class="sheet-backdrop" data-action="close-modal">
+        <div class="sheet-panel" onclick="event.stopPropagation()">
+          <div class="sheet-header">
+            <span>${escapeHtml(ws?.title || "Workspace")} — Surfaces (${surfaces.length})</span>
+            <button class="btn-icon" data-action="close-modal">✕</button>
+          </div>
+          <div class="tab-picker-sheet">
+            ${surfaces
+              .map((s) => {
+                const isCurrent = s.id === state.activeSurfaceId;
+                const meta = AGENT_META[s.agentKind] || AGENT_META.shell;
+                return `
+                <div class="workspace-card ${isCurrent ? "active" : ""}" data-open-ws="${ws.id}" data-open-surf="${s.id}">
+                  <div class="card-top">
+                    <div class="ws-title-row">
+                      <span class="status-dot ${s.state}"></span>
+                      <span class="ws-title" style="${isCurrent ? "color:#FFFFFF;font-weight:700;" : ""}">${meta.icon} ${escapeHtml(s.title)}</span>
+                      ${isCurrent ? `<span class="turn-author-badge" style="color:var(--accent-blue);background:rgba(56,189,248,0.12);">ACTIVE</span>` : ""}
+                    </div>
+                    <span class="tab-badge">${escapeHtml(s.agentKind || "shell")}</span>
+                  </div>
+                  ${s.cwd ? `<div class="card-cwd">${escapeHtml(shortenPath(s.cwd))}</div>` : ""}
+                </div>
+              `;
+              })
+              .join("")}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   if (state.activeModal === "spawn") {
     const dirs = state.dashboard?.recentDirectories || [];
     const sf = state.spawnForm;
@@ -1629,10 +1802,7 @@ function render() {
       nextTextarea.selectionStart = nextTextarea.selectionEnd = nextTextarea.value.length;
     }
 
-    const activeTab = document.querySelector(".surface-tab.active");
-    if (activeTab) {
-      activeTab.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
-    }
+    ensureActiveTabVisible();
 
     if (state.viewMode === "terminal") {
       ensureXtermMounted(state.surfaceDetail?.rawTerminalAnsi || state.surfaceDetail?.rawTerminalText);
@@ -1874,6 +2044,14 @@ function bindMissionEvents() {
       } else if (act === "open-spawn") {
         const target = el.getAttribute("data-target") || "workspace";
         openModal("spawn", { target });
+      } else if (act === "toggle-idle-workspaces") {
+        hapticTick();
+        state.showAllIdle = !state.showAllIdle;
+        const container = document.getElementById("screen-container");
+        if (container) {
+          container.innerHTML = renderMissionControl();
+          bindMissionEvents();
+        }
       } else if (act === "run-vault-search") {
         const inp = document.getElementById("vault-search-input");
         state.vaultQuery = inp ? inp.value : "";
@@ -1881,6 +2059,24 @@ function bindMissionEvents() {
       }
     });
   });
+
+  // Mission search input live filtering
+  const mSearchInp = document.getElementById("mission-search-input");
+  if (mSearchInp) {
+    mSearchInp.addEventListener("input", (e) => {
+      state.missionSearch = e.target.value;
+      const container = document.getElementById("screen-container");
+      if (container) {
+        container.innerHTML = renderMissionControl();
+        bindMissionEvents();
+        const nextInp = document.getElementById("mission-search-input");
+        if (nextInp) {
+          nextInp.focus();
+          nextInp.selectionStart = nextInp.selectionEnd = nextInp.value.length;
+        }
+      }
+    });
+  }
 
   // Vault input search on Enter
   const vInp = document.getElementById("vault-search-input");
@@ -1990,6 +2186,12 @@ function bindTabsEvents() {
   tabsContainer.querySelectorAll("[data-action='open-spawn']").forEach((el) => {
     el.addEventListener("click", () => {
       openModal("spawn", { target: "surface" });
+    });
+  });
+
+  tabsContainer.querySelectorAll("[data-action='open-surface-picker']").forEach((el) => {
+    el.addEventListener("click", () => {
+      openModal("surface_picker");
     });
   });
 }
@@ -2224,6 +2426,18 @@ function bindTerminalDockEvents() {
       if (activeTerminalInstance) {
         activeTerminalInstance.options.fontSize = state.terminalFontSize;
         try { activeTerminalFitAddon?.fit(); } catch {}
+      }
+    });
+  });
+
+  dock.querySelectorAll('[data-action="term-toggle-kb"]').forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      hapticTick();
+      if (activeTerminalInstance) {
+        activeTerminalInstance.focus();
+        const xtermTa = document.querySelector(".xterm-helper-textarea");
+        if (xtermTa) xtermTa.focus();
       }
     });
   });

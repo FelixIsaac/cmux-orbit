@@ -78,6 +78,54 @@ export function extractTelemetry(lines: string[]): AgentStatusTelemetry | null {
       continue;
     }
 
+    // Match Grok statusline / footer: "Testing Life OS │ gpt-6.1-sol │ 25% ctx" or "╰── Codex: GPT-6.1 Sol · always-approve ─╯"
+    const grokBorderMatch = line.match(/^[╰└─\s]+(?:Codex:\s*)?([A-Za-z0-9._\- ]+?)\s*·\s*([a-z\-]+)\s*[─╯┘]/i);
+    if (grokBorderMatch) {
+      telemetry.model = grokBorderMatch[1].trim();
+      telemetry.permissionMode = grokBorderMatch[2].trim();
+      foundAny = true;
+      continue;
+    }
+    const grokFooterMatch = line.match(/│\s*([a-z0-9._\-]+)\s*│\s*([0-9.]+%)\s*ctx/i);
+    if (grokFooterMatch) {
+      telemetry.model = grokFooterMatch[1].trim();
+      telemetry.contextPercent = grokFooterMatch[2].trim();
+      foundAny = true;
+      continue;
+    }
+
+    // Match Pi statusline: "↑1.1M ↓21k $0.000 (sub) 9.4%/1.0M (auto) (anthropic) claude-sonnet-5 • thinking off"
+    const piMatch = line.match(
+      /↑([0-9.kM]+)\s*↓([0-9.kM]+)\s*(\$[0-9.]+)\s*(?:\([^)]+\)\s*)?([0-9.]+%)\/[0-9.kM]+\s*(?:\([^)]+\)\s*)*([a-z0-9._\-]+(?:\s*•.*)?)/i
+    );
+    if (piMatch) {
+      telemetry.costSession = piMatch[3];
+      telemetry.contextPercent = piMatch[4];
+      telemetry.model = piMatch[5].replace(/•.*/, "").trim();
+      foundAny = true;
+      continue;
+    }
+
+    // Match Antigravity model line: "esc to cancel Gemini 3.8 Flash · high · 1 subagent(s)"
+    const agyModelMatch = line.match(/esc to cancel\s+([A-Za-z0-9._\- ]+?)\s*·\s*([a-z]+)(?:\s*·\s*([0-9]+)\s*subagent)?/i);
+    if (agyModelMatch) {
+      telemetry.model = agyModelMatch[1].trim();
+      foundAny = true;
+      continue;
+    }
+
+    // Match Antigravity active agent line: "● Agent(research: cmux Multi-CLI Protocol Auditor) Inspect terminal output per agent · 3m57s"
+    const agyAgentMatch = line.match(/^[●◯]\s*Agent\(([^)]+)\)\s*(.*?)(?:\s*·\s*([0-9smh]+))?$/i);
+    if (agyAgentMatch) {
+      telemetry.subagents.push({
+        id: agyAgentMatch[1].trim(),
+        title: agyAgentMatch[2].trim(),
+        status: agyAgentMatch[3] ? agyAgentMatch[3].trim() : "running",
+      });
+      foundAny = true;
+      continue;
+    }
+
     // Match: ctx: ▓▓▓▓░░░░░░ 37.5% | cmpct: ↻ 10
     const ctxMatch = line.match(/ctx:\s*[^\s]*\s*([0-9.]+%)/i);
     if (ctxMatch) {
@@ -151,12 +199,15 @@ export function detectTuiPrompt(rawText: string): DetectedPrompt | null {
   const numberedOptions: { lineIdx: number; index: number; label: string; isSelected: boolean }[] = [];
   for (let i = 0; i < tail.length; i++) {
     const line = tail[i];
-    const m = line.match(/^\s*([❯›>●*])?\s*(?:\[|\()?([0-9]{1,2})(?:\]|\)|\.|\))\s+(.+?)\s*$/);
+    const m = line.match(/^\s*([❯›>→])?\s*(?:\[|\()?([0-9]{1,2})(?:\]|\)|\.|\))\s+(.+?)\s*$/);
     if (m) {
       const isSelected = Boolean(m[1]);
       const idx = parseInt(m[2], 10);
       const label = m[3].trim();
-      numberedOptions.push({ lineIdx: i, index: idx, label, isSelected });
+      const isToolLog = /^(?:explored|ran|spawned|read|reading|edited|created|thought|viewed|analyzed|listing|checked)\b/i.test(label);
+      if (!isToolLog) {
+        numberedOptions.push({ lineIdx: i, index: idx, label, isSelected });
+      }
     }
   }
 
@@ -190,12 +241,14 @@ export function detectTuiPrompt(rawText: string): DetectedPrompt | null {
       }
 
       const footerText = tail.slice(group[group.length - 1].lineIdx + 1).join(" ");
-      const hasQuestionOrFooter =
-        headerCandidates.some((h) => h.includes("?") || /allow|proceed|select|choose|want|permission|confirm|approve/i.test(h)) ||
-        /esc to cancel|enter to select|to navigate|shift\+tab/i.test(footerText) ||
+      const hasExplicitQuestion = headerCandidates.some((h) =>
+        h.includes("?") || /allow|proceed|select|choose|want|permission|confirm|approve/i.test(h)
+      );
+      const hasInteractiveFooter =
+        /enter to select|to navigate|arrow keys|shift\+tab/i.test(footerText) ||
         group.some((g) => g.isSelected);
 
-      if (hasQuestionOrFooter) {
+      if (hasExplicitQuestion || hasInteractiveFooter) {
         const questionTitle =
           headerCandidates[headerCandidates.length - 1] || "Interactive Prompt";
         const subtitle =
@@ -237,14 +290,16 @@ export function detectTuiPrompt(rawText: string): DetectedPrompt | null {
   //   Deny
   const arrowItems: { lineIdx: number; label: string; isSelected: boolean }[] = [];
   let foundCursor = false;
+  const isToolLogVerb = /^(?:explored|ran|spawned|read|reading|edited|created|thought|viewed|analyzed|listing|checked)\b/i;
+
   for (let i = Math.max(0, tail.length - 14); i < tail.length; i++) {
     const rawLine = tail[i];
-    const cursorMatch = rawLine.match(/^\s*([❯›>●*])\s{1,4}(.+?)\s*$/);
+    const cursorMatch = rawLine.match(/^\s*([❯›>→])\s{1,4}(.+?)\s*$/);
     const peerMatch = rawLine.match(/^\s{2,6}([A-Za-z0-9][\w\s.,\-_/()':]+?)\s*$/);
-    if (cursorMatch && !/^[─━═╭╰┌└│]+$/.test(cursorMatch[2])) {
+    if (cursorMatch && !/^[─━═╭╰┌└│]+$/.test(cursorMatch[2]) && !isToolLogVerb.test(cursorMatch[2])) {
       foundCursor = true;
       arrowItems.push({ lineIdx: i, label: cursorMatch[2].trim(), isSelected: true });
-    } else if (foundCursor && peerMatch && !/^[─━═╭╰┌└│]+$/.test(peerMatch[1])) {
+    } else if (foundCursor && peerMatch && !/^[─━═╭╰┌└│]+$/.test(peerMatch[1]) && !isToolLogVerb.test(peerMatch[1])) {
       // Don't treat instructions like "Use arrow keys" as options
       if (!/arrow keys|to navigate|esc to/i.test(peerMatch[1])) {
         arrowItems.push({ lineIdx: i, label: peerMatch[1].trim(), isSelected: false });
@@ -265,28 +320,37 @@ export function detectTuiPrompt(rawText: string): DetectedPrompt | null {
         headerCandidates.push(hl.replace(/^[│┃]\s*/, "").replace(/\s*[│┃]$/, ""));
       }
     }
-    const questionTitle = headerCandidates[headerCandidates.length - 1] || "Select an option";
-    return {
-      kind: "numbered",
-      title: questionTitle,
-      options: arrowItems.map((item, idx) => {
-        const lower = item.label.toLowerCase();
-        let style: "primary" | "secondary" | "danger" = "secondary";
-        if (idx === 0 || lower.startsWith("allow") || lower.startsWith("yes") || lower.startsWith("approve")) {
-          style = idx === 0 ? "primary" : "secondary";
-        }
-        if (lower.startsWith("deny") || lower.startsWith("no") || lower.startsWith("cancel") || lower.startsWith("reject")) {
-          style = "danger";
-        }
-        return {
-          index: idx + 1,
-          key: String(idx + 1),
-          label: item.label,
-          isSelected: item.isSelected,
-          style,
-        };
-      }),
-    };
+
+    const hasExplicitQuestion = headerCandidates.some((h) =>
+      h.includes("?") || /allow|proceed|select|choose|want|permission|confirm|approve|which/i.test(h)
+    );
+    const footerText = tail.slice(arrowItems[arrowItems.length - 1].lineIdx + 1).join(" ");
+    const hasInteractiveFooter = /enter to select|to navigate|arrow keys|shift\+tab/i.test(footerText);
+
+    if (hasExplicitQuestion || hasInteractiveFooter) {
+      const questionTitle = headerCandidates[headerCandidates.length - 1] || "Select an option";
+      return {
+        kind: "numbered",
+        title: questionTitle,
+        options: arrowItems.map((item, idx) => {
+          const lower = item.label.toLowerCase();
+          let style: "primary" | "secondary" | "danger" = "secondary";
+          if (idx === 0 || lower.startsWith("allow") || lower.startsWith("yes") || lower.startsWith("approve")) {
+            style = idx === 0 ? "primary" : "secondary";
+          }
+          if (lower.startsWith("deny") || lower.startsWith("no") || lower.startsWith("cancel") || lower.startsWith("reject")) {
+            style = "danger";
+          }
+          return {
+            index: idx + 1,
+            key: String(idx + 1),
+            label: item.label,
+            isSelected: item.isSelected,
+            style,
+          };
+        }),
+      };
+    }
   }
 
   // 2. Check for Binary (y/n), [Y/n], [y/N], (yes/no), [y/n/c] confirmation
@@ -393,11 +457,22 @@ export function analyzeScreenText(rawText: string): ScreenAnalysisResult {
     const t = ln.trim();
     if (!t) return true;
     if (/^[─━═]{10,}$/.test(t)) return false;
+    // Claude statusline
     if (/\|.*t\/s.*\|\s*SID:/i.test(t)) return false;
     if (/^ctx:\s*.*cmpct:/i.test(t)) return false;
     if (/^cost:\s*\$.*burn:/i.test(t)) return false;
     if (/^cache:\s*.*hit:.*wall:/i.test(t)) return false;
     if (/^[⏵▸]+\s*bypass permissions/i.test(t)) return false;
+    // Grok box borders, shortcuts, and footer
+    if (/^[╭╰┌└][─━═]+[╮╯┐┘]$/.test(t)) return false;
+    if (/^[╰└─\s]+(?:Codex:\s*)?[A-Za-z0-9._\- ]+?·/i.test(t)) return false;
+    if (/Ctrl\+\.:shortcuts/i.test(t)) return false;
+    if (/│\s*[a-z0-9._\-]+\s*│\s*[0-9.]+\s*ctx/i.test(t)) return false;
+    // Pi statuslines
+    if (/^↑[0-9.kM]+\s*↓[0-9.kM]+\s*\$[0-9.]+/i.test(t)) return false;
+    // Antigravity statuslines
+    if (/^[●◯]\s*Agent\([^)]+\)/i.test(t)) return false;
+    if (/^esc to cancel\s+[A-Za-z0-9._\- ]+·/i.test(t)) return false;
     return true;
   });
 
