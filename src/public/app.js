@@ -693,13 +693,13 @@ function renderSurfaceScreen() {
     <div class="surface-screen" style="display:flex;flex-direction:column;height:100dvh;overflow:hidden;">
       <header class="top-nav">
         <button class="btn-icon" data-action="go-home">‹ Deck</button>
-        <button class="nav-title-group" style="background:none;border:none;cursor:pointer;text-align:left;flex:1;margin:0 4px;" data-action="open-ws-switcher">
+        <button class="nav-title-group" style="background:none;border:none;cursor:pointer;text-align:left;flex:1;margin:0 4px;min-width:0;" data-action="open-ws-switcher">
           <span class="nav-title">
             <span class="status-dot ${ws?.state || "idle"}"></span>
             <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(ws?.title || "Workspace")}</span>
             <span style="font-size:11px;color:var(--text-muted);flex-shrink:0;">▾</span>
           </span>
-          <span class="nav-subtitle">${escapeHtml(surf?.title || "")} · ${escapeHtml(shortenPath(surf?.cwd || ws?.cwd || ""))}</span>
+          <span class="nav-subtitle" style="max-width:260px;">${escapeHtml(surf?.title || "")} · ${escapeHtml(shortenPath(surf?.cwd || ws?.cwd || ""))}</span>
         </button>
         <div class="nav-actions">
           <button class="btn-pill ${state.viewMode === "diff" ? "active" : ""}" data-mode="diff">± Diff</button>
@@ -716,11 +716,18 @@ function renderSurfaceScreen() {
             .map((s) => {
               const meta = AGENT_META[s.agentKind] || AGENT_META.shell;
               const isAct = s.id === state.activeSurfaceId;
+              const dotState = isAct
+                ? s.state
+                : s.state === "needs_input"
+                ? "needs_input"
+                : s.hasUnread
+                ? "unread"
+                : "idle";
               return `
-              <button class="surface-tab ${isAct ? "active" : ""}" data-open-ws="${ws.id}" data-open-surf="${s.id}">
-                <span class="status-dot ${s.state}"></span>
+              <button class="surface-tab ${isAct ? "active" : ""}" data-open-ws="${ws.id}" data-open-surf="${s.id}" title="${escapeHtml(s.title)}">
+                <span class="status-dot ${dotState}"></span>
                 <span>${meta.icon}</span>
-                <span style="overflow:hidden;text-overflow:ellipsis;">${escapeHtml(s.title)}</span>
+                <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(s.title)}</span>
               </button>
             `;
             })
@@ -765,6 +772,68 @@ function renderSurfaceScreen() {
         </div>
       </footer>
     </div>
+  `;
+}
+
+function cleanToolSummary(summary) {
+  if (!summary) return "";
+  let s = String(summary).trim();
+  s = s.replace(/-Users-[a-zA-Z0-9_.-]+-Library-CloudStorage-GoogleDrive-[a-zA-Z0-9_.-]+-M\b/g, ".../Testing Life OS");
+  s = s.replace(/^\/Users\/[^/]+/g, "~");
+  if (s.length > 70) {
+    s = s.slice(0, 68) + "…";
+  }
+  return s;
+}
+
+function renderGroupedToolCalls(toolCalls) {
+  if (!toolCalls || toolCalls.length === 0) return "";
+  if (toolCalls.length === 1) {
+    const tc = toolCalls[0];
+    return `
+      <details class="tool-call-row">
+        <summary class="tool-call-summary">
+          <div style="display:flex;align-items:center;gap:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;">
+            <span>⚡</span>
+            <span style="font-weight:650;color:var(--accent-blue);flex-shrink:0;">${escapeHtml(tc.name)}:</span>
+            <span style="color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(cleanToolSummary(tc.summary))}</span>
+          </div>
+          <span class="chevron">▾</span>
+        </summary>
+        <div class="tool-call-body">
+          ${tc.output ? `<div>${escapeHtml(tc.output)}</div>` : `<div style="color:var(--text-muted);">Executed successfully.</div>`}
+        </div>
+      </details>
+    `;
+  }
+
+  const types = Array.from(new Set(toolCalls.map((t) => t.name))).join(", ");
+  return `
+    <details class="tool-call-group">
+      <summary class="tool-group-summary">
+        <div class="tool-group-left">
+          <span>⚡</span>
+          <span style="font-weight:600;color:var(--text-primary);">${toolCalls.length} tool calls</span>
+          <span class="tool-types-pill">${escapeHtml(types)}</span>
+        </div>
+        <span class="chevron">▾</span>
+      </summary>
+      <div class="tool-group-list">
+        ${toolCalls
+          .map(
+            (tc) => `
+          <div class="tool-sub-item">
+            <div class="tool-sub-head">
+              <span class="tool-badge-small">${escapeHtml(tc.name)}</span>
+              <span class="tool-sub-summary">${escapeHtml(cleanToolSummary(tc.summary))}</span>
+            </div>
+            ${tc.output ? `<pre class="tool-sub-output">${escapeHtml(tc.output)}</pre>` : ""}
+          </div>
+        `
+          )
+          .join("")}
+      </div>
+    </details>
   `;
 }
 
@@ -908,21 +977,7 @@ function renderSurfaceViewportContent(detail, surf, ws) {
             }
             ${
               m.toolCalls && m.toolCalls.length > 0
-                ? m.toolCalls
-                    .map(
-                      (tc) => `
-                <details class="tool-call-row">
-                  <summary class="tool-call-summary">
-                    <span>⚡ ${escapeHtml(tc.name)}: ${escapeHtml(tc.summary || "")}</span>
-                    <span class="chevron">▾</span>
-                  </summary>
-                  <div class="tool-call-body">
-                    ${tc.output ? `<div>${escapeHtml(tc.output)}</div>` : `<div style="color:var(--text-muted);">Executed successfully.</div>`}
-                  </div>
-                </details>
-              `
-                    )
-                    .join("")
+                ? renderGroupedToolCalls(m.toolCalls)
                 : ""
             }
             ${m.text ? `<div class="prose">${renderMarkdown(m.text)}</div>` : ""}
@@ -933,14 +988,24 @@ function renderSurfaceViewportContent(detail, surf, ws) {
     }
 
     ${
-      liveSnippet
+      messages.length === 0 && liveSnippet
         ? `
       <div class="workspace-card" style="margin-top:8px;">
         <div class="card-top" style="margin-bottom:4px;">
-          <span style="font-size:11px;font-weight:600;color:var(--accent-blue);">● LIVE TERMINAL TAIL</span>
+          <span style="font-size:11px;font-weight:600;color:var(--accent-blue);">● LIVE TERMINAL BUFFER</span>
           <button class="btn-icon" style="height:24px;font-size:11px;" data-mode="terminal">Full CLI →</button>
         </div>
         <pre class="terminal-box" style="min-height:auto;max-height:160px;margin:0;padding:8px;font-size:11.5px;">${renderTerminalAnsi(liveSnippet)}</pre>
+      </div>
+    `
+        : surf?.state === "running"
+        ? `
+      <div class="live-activity-bar">
+        <div class="live-activity-left">
+          <span class="status-dot running"></span>
+          <span>Agent executing tools & generation…</span>
+        </div>
+        <button class="btn-icon" data-mode="terminal" style="height:26px;font-size:11.5px;padding:0 8px;">&gt;_ CLI</button>
       </div>
     `
         : ""
