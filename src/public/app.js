@@ -1674,6 +1674,9 @@ function renderModal() {
   if (state.activeModal === "spawn") {
     const dirs = state.dashboard?.recentDirectories || [];
     const sf = state.spawnForm;
+    const currentWs = state.dashboard?.workspaces?.find(
+      (w) => w.id === state.activeWorkspaceId
+    );
     const presets = [
       { id: "claude", label: "✦ Claude Code", cmd: "claude", desc: "Anthropic CLI agent" },
       { id: "grok", label: "𝕏 Grok CLI", cmd: "grok", desc: "xAI deep research & code" },
@@ -1682,6 +1685,10 @@ function renderModal() {
       { id: "agy", label: "▲ Antigravity", cmd: "ag", desc: "Deepmind agentic coding" },
       { id: "shell", label: ">_ Shell", cmd: "", desc: "Standard zsh terminal" },
     ];
+
+    const currentDirObj = dirs.find((d) => d.path === sf.cwd);
+    const currentDirName = currentDirObj?.name || (sf.cwd ? sf.cwd.split("/").filter(Boolean).pop() : "Projects");
+    const currentDirShort = currentDirObj?.shortPath || shortenPath(sf.cwd);
 
     return `
       <div class="sheet-backdrop" data-action="close-modal">
@@ -1706,15 +1713,66 @@ function renderModal() {
 
           <div>
             <div class="form-label" style="margin-bottom:6px;">Working Directory</div>
-            <input id="spawn-cwd" class="form-input" value="${escapeHtml(sf.cwd)}" placeholder="/Users/felix/Projects/..." />
-            <div style="display:flex;gap:6px;overflow-x:auto;margin-top:6px;">
-              ${dirs
-                .map(
-                  (d) =>
-                    `<button class="btn-pill" data-pick-dir="${escapeHtml(d.path)}">${escapeHtml(d.label)}</button>`
-                )
-                .join("")}
-            </div>
+
+            ${sf.target === "surface" && !sf.showCustomDir ? `
+              <div class="dir-context-card">
+                <div class="dir-context-left">
+                  <span class="dir-context-icon">📁</span>
+                  <div class="dir-context-text">
+                    <span class="dir-context-name">${escapeHtml(currentWs?.title || currentDirName)}</span>
+                    <span class="dir-context-path">${escapeHtml(currentDirShort)}</span>
+                  </div>
+                </div>
+                <button type="button" class="btn-pill" data-action="toggle-custom-dir" style="height:26px;font-size:11.5px;padding:0 10px;">
+                  Change ▾
+                </button>
+              </div>
+            ` : `
+              <div style="display:flex;flex-direction:column;gap:8px;">
+                ${sf.target === "surface" ? `
+                  <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <span style="font-size:11.5px;color:var(--text-muted);">Pick project or enter custom path:</span>
+                    <button type="button" class="btn-pill" data-action="toggle-custom-dir" style="height:22px;font-size:10.5px;padding:0 8px;">
+                      Keep Workspace Root
+                    </button>
+                  </div>
+                ` : ""}
+
+                <div class="dir-chip-scroll">
+                  ${dirs
+                    .slice(0, 10)
+                    .map(
+                      (d) =>
+                        `<button type="button" class="dir-chip ${sf.cwd === d.path ? "active" : ""}" data-pick-dir="${escapeHtml(d.path)}">
+                          <span>${d.icon || "📁"}</span>
+                          <span class="dir-chip-label">${escapeHtml(d.name || d.label)}</span>
+                        </button>`
+                    )
+                    .join("")}
+                </div>
+
+                <div class="dir-input-group">
+                  <span class="dir-input-prefix">📁</span>
+                  <input id="spawn-cwd" class="form-input dir-input" value="${escapeHtml(sf.cwd)}" placeholder="/Users/felix/Projects/..." />
+                  ${sf.cwd ? `<button type="button" class="dir-clear-btn" data-action="clear-spawn-cwd" title="Clear">✕</button>` : ""}
+                </div>
+
+                ${dirs.length > 0 ? `
+                  <div class="dir-suggestions-list">
+                    ${dirs.slice(0, 5).map((d) => `
+                      <div class="dir-suggestion-item ${sf.cwd === d.path ? "selected" : ""}" data-pick-dir="${escapeHtml(d.path)}">
+                        <span class="dir-sugg-icon">${d.icon || "📁"}</span>
+                        <div class="dir-sugg-meta">
+                          <span class="dir-sugg-name">${escapeHtml(d.name)}</span>
+                          <span class="dir-sugg-path">${escapeHtml(d.shortPath || shortenPath(d.path))}</span>
+                        </div>
+                        ${sf.cwd === d.path ? `<span class="dir-sugg-check">✓</span>` : ""}
+                      </div>
+                    `).join("")}
+                  </div>
+                ` : ""}
+              </div>
+            `}
           </div>
 
           <div>
@@ -1956,10 +2014,11 @@ function openModal(modalName, options = {}) {
     state.spawnForm.target = target;
     state.spawnForm.cwd =
       options.cwd ||
-      state.surfaceDetail?.surface?.cwd ||
       currentWs?.cwd ||
+      state.surfaceDetail?.surface?.cwd ||
       state.dashboard?.recentDirectories?.[0]?.path ||
       "/Users/felix/Projects";
+    state.spawnForm.showCustomDir = target === "workspace";
   }
 
   const root = document.getElementById("modal-root");
@@ -2481,14 +2540,63 @@ function bindModalEvents() {
     });
   });
 
+  root.querySelectorAll("[data-action='toggle-custom-dir']").forEach((el) => {
+    el.addEventListener("click", () => {
+      hapticTick();
+      state.spawnForm.showCustomDir = !state.spawnForm.showCustomDir;
+      if (!state.spawnForm.showCustomDir) {
+        const currentWs = state.dashboard?.workspaces?.find(
+          (w) => w.id === state.activeWorkspaceId
+        );
+        if (currentWs?.cwd) {
+          state.spawnForm.cwd = currentWs.cwd;
+        }
+      }
+      root.innerHTML = renderModal();
+      bindModalEvents();
+    });
+  });
+
   root.querySelectorAll("[data-pick-dir]").forEach((el) => {
     el.addEventListener("click", () => {
       hapticTick();
-      state.spawnForm.cwd = el.getAttribute("data-pick-dir");
-      const cwdInp = document.getElementById("spawn-cwd");
-      if (cwdInp) cwdInp.value = state.spawnForm.cwd;
+      state.spawnForm.cwd = el.getAttribute("data-pick-dir") || "";
+      root.innerHTML = renderModal();
+      bindModalEvents();
     });
   });
+
+  root.querySelectorAll("[data-action='clear-spawn-cwd']").forEach((el) => {
+    el.addEventListener("click", () => {
+      hapticTick();
+      state.spawnForm.cwd = "";
+      root.innerHTML = renderModal();
+      bindModalEvents();
+      const nextCwdInp = document.getElementById("spawn-cwd");
+      if (nextCwdInp) nextCwdInp.focus();
+    });
+  });
+
+  const cwdInp = root.querySelector("#spawn-cwd");
+  if (cwdInp) {
+    cwdInp.addEventListener("input", (e) => {
+      state.spawnForm.cwd = e.target.value;
+    });
+  }
+
+  const titleInp = root.querySelector("#spawn-title");
+  if (titleInp) {
+    titleInp.addEventListener("input", (e) => {
+      state.spawnForm.title = e.target.value;
+    });
+  }
+
+  const promptInp = root.querySelector("#spawn-prompt");
+  if (promptInp) {
+    promptInp.addEventListener("input", (e) => {
+      state.spawnForm.initialPrompt = e.target.value;
+    });
+  }
 
   root.querySelectorAll("[data-action='confirm-spawn']").forEach((el) => {
     el.addEventListener("click", async (e) => {

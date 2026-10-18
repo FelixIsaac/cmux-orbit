@@ -210,12 +210,234 @@ button:active,
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: all 140ms ease;
+}
+
+.btn-pill:active {
+  transform: scale(0.97);
 }
 
 .btn-pill.active {
   background: rgba(255, 255, 255, 0.12);
   color: #EDEDED;
   border-color: var(--border-medium);
+}
+
+/* Directory & Project Selector */
+.dir-context-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-subtle);
+  transition: border-color 160ms ease;
+}
+
+.dir-context-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.dir-context-icon {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.dir-context-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.dir-context-name {
+  font-size: 13.5px;
+  font-weight: 650;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dir-context-path {
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dir-chip-scroll {
+  display: flex;
+  gap: 7px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 4px;
+  margin-top: 6px;
+  scrollbar-width: none;
+}
+
+.dir-chip-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.dir-chip {
+  height: 30px;
+  padding: 0 11px;
+  border-radius: 15px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 550;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  max-width: 200px;
+  cursor: pointer;
+  transition: all 140ms ease;
+}
+
+.dir-chip:active {
+  transform: scale(0.96);
+}
+
+.dir-chip.active {
+  background: rgba(56, 189, 248, 0.12);
+  border-color: rgba(56, 189, 248, 0.45);
+  color: #38BDF8;
+}
+
+.dir-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dir-input-group {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.dir-input-prefix {
+  position: absolute;
+  left: 12px;
+  font-size: 14px;
+  pointer-events: none;
+  color: var(--text-muted);
+}
+
+.dir-input {
+  padding-left: 36px !important;
+  padding-right: 36px !important;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.dir-clear-btn {
+  position: absolute;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  color: var(--text-muted);
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.08);
+  border: none;
+  cursor: pointer;
+}
+
+.dir-clear-btn:active {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.dir-suggestions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 180px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 5px;
+  background: rgba(0, 0, 0, 0.25);
+  margin-top: 6px;
+}
+
+.dir-suggestion-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.dir-suggestion-item:active,
+.dir-suggestion-item.selected {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.dir-suggestion-item.selected {
+  border-left: 2.5px solid var(--accent-blue);
+}
+
+.dir-sugg-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.dir-sugg-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
+.dir-sugg-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dir-sugg-path {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dir-sugg-check {
+  color: var(--accent-blue);
+  font-size: 13px;
+  font-weight: 700;
 }
 
 /* Segmented Switcher */

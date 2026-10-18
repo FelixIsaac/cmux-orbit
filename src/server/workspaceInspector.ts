@@ -220,35 +220,93 @@ export async function inspectGitWorkspace(cwd?: string): Promise<GitWorkspaceSum
   };
 }
 
-export function listRecentDirectories(activeWorkspaceDirs: string[]): { label: string; path: string }[] {
-  const dirs = new Set<string>();
-  for (const d of activeWorkspaceDirs) {
-    if (d && existsSync(d)) dirs.add(d);
+export interface ProjectDirectoryEntry {
+  path: string;
+  name: string;
+  shortPath: string;
+  label: string;
+  category: "workspace" | "project" | "vault" | "folder";
+  icon: string;
+  isGitRepo?: boolean;
+}
+
+export function formatDirectoryEntry(p: string, isWorkspace = false): ProjectDirectoryEntry {
+  const norm = p.replace(/\/+$/, "");
+  const base = basename(norm) || norm;
+
+  let shortPath = norm.replace(HOME, "~");
+  if (shortPath.includes("Library/CloudStorage/GoogleDrive-")) {
+    shortPath = shortPath.replace(/~\/Library\/CloudStorage\/GoogleDrive-[^/]+\/My Drive/, "~/GDrive");
+  } else if (shortPath.includes("Library/CloudStorage/OneDrive-")) {
+    shortPath = shortPath.replace(/~\/Library\/CloudStorage\/OneDrive-[^/]+/, "~/OneDrive");
+  } else if (shortPath.includes("Library/Mobile Documents/com~apple~CloudDocs")) {
+    shortPath = shortPath.replace(/~\/Library\/Mobile Documents\/com~apple~CloudDocs/, "~/iCloud");
   }
+
+  let category: ProjectDirectoryEntry["category"] = "folder";
+  let icon = "📁";
+
+  if (norm.includes("Obsidian")) {
+    category = "vault";
+    icon = "📓";
+  } else if (isWorkspace) {
+    category = "workspace";
+    icon = "⚡";
+  } else if (norm.includes("/Projects/")) {
+    category = "project";
+    icon = "📁";
+  }
+
+  let isGit = false;
+  try {
+    isGit = existsSync(join(norm, ".git"));
+  } catch {}
+
+  return {
+    path: norm,
+    name: base,
+    shortPath,
+    label: base,
+    category,
+    icon,
+    isGitRepo: isGit,
+  };
+}
+
+export function listRecentDirectories(activeWorkspaceDirs: string[]): ProjectDirectoryEntry[] {
+  const seenPaths = new Set<string>();
+  const results: ProjectDirectoryEntry[] = [];
+
+  for (const d of activeWorkspaceDirs) {
+    if (d && existsSync(d) && !seenPaths.has(d)) {
+      seenPaths.add(d);
+      results.push(formatDirectoryEntry(d, true));
+    }
+  }
+
   const projectsDir = join(HOME, "Projects");
   if (existsSync(projectsDir)) {
-    dirs.add(projectsDir);
     try {
       for (const entry of readdirSync(projectsDir)) {
         if (entry.startsWith(".")) continue;
         const full = join(projectsDir, entry);
-        try {
-          if (statSync(full).isDirectory()) dirs.add(full);
-        } catch {
-          // ignore
+        if (!seenPaths.has(full)) {
+          try {
+            if (statSync(full).isDirectory()) {
+              seenPaths.add(full);
+              results.push(formatDirectoryEntry(full, false));
+            }
+          } catch {}
         }
       }
-    } catch {
-      // ignore
-    }
+    } catch {}
   }
-  const obsidian = join(HOME, "Documents/Obsidian Vault");
-  if (existsSync(obsidian)) dirs.add(obsidian);
 
-  return Array.from(dirs)
-    .slice(0, 18)
-    .map((p) => ({
-      path: p,
-      label: p.replace(HOME, "~"),
-    }));
+  const obsidian = join(HOME, "Documents/Obsidian Vault");
+  if (existsSync(obsidian) && !seenPaths.has(obsidian)) {
+    seenPaths.add(obsidian);
+    results.push(formatDirectoryEntry(obsidian, false));
+  }
+
+  return results.slice(0, 20);
 }

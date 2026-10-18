@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
-import { extname, join } from "node:path";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { extname, join, resolve } from "node:path";
 import { cmuxRpc, CmuxEventStream, resolveCmuxSocketPath } from "./cmuxSocket";
 import {
   buildDashboardSnapshot,
@@ -7,7 +7,12 @@ import {
   getVaultSessions,
 } from "./stateAggregator";
 import { parseTranscriptFile } from "./transcriptEngine";
-import { inspectGitWorkspace, readFilePreview } from "./workspaceInspector";
+import {
+  formatDirectoryEntry,
+  inspectGitWorkspace,
+  readFilePreview,
+  resolveSafeFilePath,
+} from "./workspaceInspector";
 
 const PUBLIC_DIR = join(import.meta.dir, "../public");
 
@@ -212,6 +217,30 @@ export function startOrbitServer(port = Number(process.env.PORT || 4400)) {
         }
         const preview = readFilePreview(path, cwd);
         return jsonResponse({ ok: preview.ok, data: preview });
+      }
+
+      if (pathname === "/api/dirs" && req.method === "GET") {
+        const queryPath = url.searchParams.get("path") || join(process.env.HOME || "", "Projects");
+        const fullPath = resolveSafeFilePath(queryPath);
+        try {
+          if (existsSync(fullPath) && statSync(fullPath).isDirectory()) {
+            const entries = readdirSync(fullPath, { withFileTypes: true })
+              .filter((ent) => ent.isDirectory() && !ent.name.startsWith("."))
+              .slice(0, 40)
+              .map((ent) => formatDirectoryEntry(join(fullPath, ent.name)));
+            return jsonResponse({
+              ok: true,
+              data: {
+                currentPath: fullPath,
+                parentPath: fullPath === (process.env.HOME || "") ? null : resolve(fullPath, ".."),
+                items: entries,
+              },
+            });
+          }
+          return jsonResponse({ ok: false, error: "Not a directory" }, 400);
+        } catch (err: any) {
+          return jsonResponse({ ok: false, error: err?.message || "Failed to list directory" }, 500);
+        }
       }
 
       if (pathname === "/api/vault" && req.method === "GET") {
