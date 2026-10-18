@@ -1,4 +1,4 @@
-// cmux-orbit — Agent-First Mobile Mission Control Client
+// cmux-orbit — Calm, Apple/Linear-Grade Mobile Mission Control Client
 import { AnsiUp } from "./vendor/ansi_up.js";
 
 const ansiUp = new AnsiUp();
@@ -33,8 +33,7 @@ const state = {
   docPreview: null,
   composerMode: "ask", // "ask" | "shell"
   composerText: "",
-  showKeyStrip: false,
-  activeModal: null, // null | "spawn" | "ws_switcher" | "vault_preview"
+  activeModal: null, // null | "spawn" | "ws_switcher" | "shortcuts" | "telemetry" | "vault_preview"
   spawnForm: {
     target: "surface", // "surface" | "workspace"
     preset: "claude",
@@ -151,34 +150,27 @@ function colorizeTerminalBuffer(rawText) {
   let text = escapeHtml(rawText);
   const lines = text.split("\n");
   const colored = lines.map((line) => {
-    // Prompt line: "❯ ", "$ ", "% "
     if (/^\s*[❯›$%]\s+/.test(line)) {
       return `<span class="term-prompt">${line}</span>`;
     }
-    // Success lines: "✓ ..." or "✔ ..."
     if (/^\s*[✓✔]\s+/.test(line) || /status:\s*success|build succeeded/i.test(line)) {
       return `<span class="term-success">${line}</span>`;
     }
-    // Error lines: "✗ ..." or "Error: ..."
     if (/^\s*[✗✖!]\s+/.test(line) || /\b(error|failed|fatal|exception)\b/i.test(line)) {
       return `<span class="term-error">${line}</span>`;
     }
-    // Warning lines
     if (/\b(warn|warning)\b/i.test(line)) {
       return `<span class="term-warn">${line}</span>`;
     }
-    // Git diff lines
     if (/^\+[^+]/.test(line)) {
       return `<span class="diff-add">${line}</span>`;
     }
     if (/^-[^-]/.test(line)) {
       return `<span class="diff-del">${line}</span>`;
     }
-    // Box-drawing divider lines: ─, ━, ═
     if (/^[─━═╭╰┌└│┃\s]{6,}$/.test(line)) {
       return `<span class="term-border">${line}</span>`;
     }
-    // Telemetry / status bar lines
     if (/\|.*t\/s.*\|\s*SID:/i.test(line) || /^ctx:\s*.*cmpct:/i.test(line)) {
       return `<span class="term-telemetry">${line}</span>`;
     }
@@ -226,12 +218,12 @@ function renderMarkdown(md) {
     const cleanCode = code.trimEnd();
     const highlighted = highlightCode(cleanCode, lang);
     codeBlocks.push(
-      `<div class="code-block-wrapper"><button class="copy-code-btn" onclick="copyCodeSnippet(this)">Copy</button><pre><code class="lang-${lang || "text"}">${highlighted}</code></pre></div>`
+      `<div class="code-block-wrapper"><div class="code-header"><span>${escapeHtml(lang || "text")}</span><button class="copy-code-btn" onclick="copyCodeSnippet(this)">Copy</button></div><pre><code class="lang-${lang || "text"}">${highlighted}</code></pre></div>`
     );
     return `@@CODEBLOCK_${idx}@@`;
   });
 
-  // Callout Alerts: > [!NOTE], > [!TIP], > [!IMPORTANT], > [!WARNING], > [!CAUTION]
+  // Callout Alerts
   text = text.replace(
     /^(?:&gt;\s*)+\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]([^\n]*)\n([\s\S]*?)(?=(?:\n{2,}|\n(?=[^&])|$))/gim,
     (_m, type, title, body) => {
@@ -248,7 +240,7 @@ function renderMarkdown(md) {
     }
   );
 
-  // Markdown tables: lines with pipes | a | b |
+  // Markdown tables
   text = text.replace(/((?:^|\n)\|[^\n]+\|\n\|[-:\s|]+\|\n(?:\|[^\n]+\|\n?)+)/g, (match) => {
     const lines = match.trim().split("\n");
     if (lines.length < 3) return match;
@@ -512,20 +504,21 @@ function scrollToViewportBottom() {
 // Render Functions
 function renderAgentBadge(agentKind) {
   const meta = AGENT_META[agentKind] || AGENT_META.shell;
-  return `<span class="agent-badge ${meta.cls}">${meta.icon} ${meta.label}</span>`;
+  return `<span class="turn-author-badge">${meta.icon} ${meta.label}</span>`;
 }
 
 function renderMissionControl() {
   const dash = state.dashboard;
   if (!dash) {
     return `
-      <header class="top-header">
-        <div class="header-row">
-          <div class="brand-pill"><span class="live-dot"></span> cmux Orbit</div>
+      <header class="top-nav">
+        <div class="nav-title-group">
+          <span class="nav-title"><span class="status-dot ${state.connected ? "running" : "idle"}"></span> Orbit</span>
+          <span class="nav-subtitle">Connecting to cmux.sock on Mac…</span>
         </div>
       </header>
-      <main class="mission-body">
-        <div class="workspace-card">Connecting to cmux.sock on Mac…</div>
+      <main class="content-area">
+        <div class="workspace-card">Establishing bridge to cmux…</div>
       </main>
     `;
   }
@@ -541,134 +534,89 @@ function renderMissionControl() {
   }
 
   return `
-    <header class="top-header">
-      <div class="header-row">
-        <div class="brand-pill">
-          <span class="live-dot ${state.connected ? "" : "offline"}"></span>
-          <span>cmux Orbit</span>
-          <span class="header-stats">${dash.totalWorkspaces} WS · ${dash.totalSurfaces} Surf</span>
-        </div>
-        <div class="header-actions">
-          <button class="icon-btn" data-action="refresh-dash" title="Refresh">↻</button>
-          <button class="icon-btn primary" data-action="open-spawn" data-target="workspace">+ Spawn</button>
-        </div>
+    <header class="top-nav">
+      <div class="nav-title-group">
+        <span class="nav-title">
+          <span class="status-dot ${state.connected ? "running" : "idle"}"></span>
+          Orbit
+        </span>
+        <span class="nav-subtitle">${dash.totalWorkspaces} workspaces · ${dash.totalSurfaces} surfaces</span>
       </div>
-      <div class="filter-strip">
-        <button class="filter-pill ${state.filter === "all" ? "active" : ""}" data-filter="all">
-          All <span class="badge-count">${dash.totalWorkspaces}</span>
-        </button>
-        <button class="filter-pill ${state.filter === "needs_input" ? "active" : ""}" data-filter="needs_input">
-          Needs Input <span class="badge-count amber">${dash.needsInputCount}</span>
-        </button>
-        <button class="filter-pill ${state.filter === "active" ? "active" : ""}" data-filter="active">
-          Running / Unread <span class="badge-count cyan">${dash.runningCount + dash.unreadCount}</span>
-        </button>
-        <button class="filter-pill ${state.filter === "vault" ? "active" : ""}" data-filter="vault">
-          🔍 Vault History
-        </button>
+      <div class="nav-actions">
+        <button class="btn-icon" data-action="refresh-dash" title="Refresh">↻</button>
+        <button class="btn-icon primary" data-action="open-spawn" data-target="workspace">+ New</button>
       </div>
     </header>
 
-    <main class="mission-body">
+    <nav class="segment-bar">
+      <button class="segment-item ${state.filter === "all" ? "active" : ""}" data-filter="all">
+        All (${dash.totalWorkspaces})
+      </button>
+      <button class="segment-item ${state.filter === "needs_input" ? "active" : ""}" data-filter="needs_input">
+        Input${dash.needsInputCount > 0 ? ` (${dash.needsInputCount})` : ""}
+      </button>
+      <button class="segment-item ${state.filter === "active" ? "active" : ""}" data-filter="active">
+        Active (${dash.runningCount + dash.unreadCount})
+      </button>
+      <button class="segment-item ${state.filter === "vault" ? "active" : ""}" data-filter="vault">
+        Vault
+      </button>
+    </nav>
+
+    <main class="content-area">
       ${
         state.filter === "vault"
           ? renderVaultView()
           : `
         ${
-          attentionList.length > 0 && state.filter === "all"
+          attentionList.length > 0 && (state.filter === "all" || state.filter === "needs_input")
             ? `
-          <div class="section-label">
-            <span>⚡ Attention & Live Activity (${attentionList.length})</span>
-            <span>1-Tap Triage</span>
-          </div>
-          <div class="attention-stack">
-            ${attentionList
-              .map(
-                (item) => `
-              <div class="attention-card ${item.state}" data-open-ws="${item.workspaceId}" data-open-surf="${item.surfaceId}">
-                <div class="card-top-row">
-                  <div class="ws-tag">
-                    <span class="status-ring ${item.state}"></span>
-                    <span>${escapeHtml(item.workspaceTitle)}</span>
-                  </div>
-                  ${renderAgentBadge(item.agentKind)}
-                </div>
-                <div class="attention-title">${escapeHtml(item.surfaceTitle)}</div>
-                <div class="attention-summary">${escapeHtml(item.summary)}</div>
-                <div class="inline-action-row">
-                  <button class="inline-btn open" data-open-ws="${item.workspaceId}" data-open-surf="${item.surfaceId}">
-                    Open Surface →
-                  </button>
-                  ${
-                    item.state === "needs_input"
-                      ? `
-                    <button class="inline-btn approve" data-quick-key="1" data-ws="${item.workspaceId}" data-surf="${item.surfaceId}">
-                      ✓ Yes (1)
-                    </button>
-                  `
-                      : `
-                    <button class="inline-btn" data-quick-key="escape" data-ws="${item.workspaceId}" data-surf="${item.surfaceId}">
-                      ■ Stop (Esc)
-                    </button>
-                  `
-                  }
-                </div>
+          ${attentionList
+            .map(
+              (item) => `
+            <div class="attention-banner" data-open-ws="${item.workspaceId}" data-open-surf="${item.surfaceId}">
+              <div class="attention-head">
+                <span>⚡ Needs Your Input</span>
+                <span>${escapeHtml(item.workspaceTitle)}</span>
               </div>
-            `
-              )
-              .join("")}
-          </div>
+              <div class="attention-body">${escapeHtml(item.summary || item.surfaceTitle)}</div>
+              <div class="attention-meta">${escapeHtml(item.surfaceTitle)} · ${item.agentKind.toUpperCase()}</div>
+              <div style="display:flex;gap:8px;margin-top:6px;">
+                <button class="tui-btn primary" data-open-ws="${item.workspaceId}" data-open-surf="${item.surfaceId}">
+                  Respond →
+                </button>
+                <button class="tui-btn secondary" data-quick-key="1" data-ws="${item.workspaceId}" data-surf="${item.surfaceId}">
+                  ✓ Yes (1)
+                </button>
+              </div>
+            </div>
+          `
+            )
+            .join("")}
         `
             : ""
         }
 
-        <div class="section-label">
-          <span>Workspaces (${workspaces.length})</span>
-          <span>Tap any surface pill to jump</span>
-        </div>
+        <div class="section-header">Workspaces</div>
 
-        <div class="workspace-grid">
-          ${workspaces
-            .map((ws) => {
-              const primarySurf =
-                ws.surfaces.find((s) => s.isFocused) || ws.surfaces[0];
-              return `
-              <div class="workspace-card state-${ws.state}" data-open-ws="${ws.id}" data-open-surf="${primarySurf?.id || ""}">
-                <div class="ws-header">
-                  <div class="ws-title-group">
-                    <div class="ws-title-row">
-                      <span class="status-ring ${ws.state}"></span>
-                      <span class="ws-title">${escapeHtml(ws.title)}</span>
-                      ${ws.isPinned ? `<span class="pin-tag">PINNED</span>` : ""}
-                    </div>
-                    <div class="ws-cwd">${escapeHtml(shortenPath(ws.cwd))}</div>
-                  </div>
-                  <span class="badge-count">${ws.surfaces.length} tabs</span>
+        ${workspaces
+          .map((ws) => {
+            const primarySurf = ws.surfaces.find((s) => s.isFocused) || ws.surfaces[0];
+            return `
+            <div class="workspace-card" data-open-ws="${ws.id}" data-open-surf="${primarySurf?.id || ""}">
+              <div class="card-top">
+                <div class="ws-title-row">
+                  <span class="status-dot ${ws.state}"></span>
+                  <span class="ws-title">${escapeHtml(ws.title)}</span>
                 </div>
-                ${
-                  ws.preview
-                    ? `<div class="ws-preview">${escapeHtml(ws.preview)}</div>`
-                    : ""
-                }
-                <div class="surface-pills-wrap">
-                  ${ws.surfaces
-                    .map((s) => {
-                      const meta = AGENT_META[s.agentKind] || AGENT_META.shell;
-                      return `
-                      <div class="surface-chip ${s.isFocused ? "focused" : ""} ${s.state}" data-open-ws="${ws.id}" data-open-surf="${s.id}">
-                        <span class="status-ring ${s.state}"></span>
-                        <span>${meta.icon}</span>
-                        <span class="surface-chip-label">${escapeHtml(s.title)}</span>
-                      </div>
-                    `;
-                    })
-                    .join("")}
-                </div>
+                <span class="tab-badge">${ws.surfaces.length} tab${ws.surfaces.length === 1 ? "" : "s"}</span>
               </div>
-            `;
-            })
-            .join("")}
-        </div>
+              <div class="card-cwd">${escapeHtml(shortenPath(ws.cwd))}</div>
+              ${ws.preview ? `<div class="card-snippet">${escapeHtml(ws.preview)}</div>` : ""}
+            </div>
+          `;
+          })
+          .join("")}
       `
       }
     </main>
@@ -677,27 +625,26 @@ function renderMissionControl() {
 
 function renderVaultView() {
   return `
-    <div style="display:flex; gap:8px;">
+    <div style="display:flex;gap:8px;">
       <input
         id="vault-search-input"
         class="form-input"
         type="search"
-        placeholder="Search Claude, Grok, Codex, Pi, Agy sessions…"
+        placeholder="Search past Claude, Grok, Codex sessions…"
         value="${escapeHtml(state.vaultQuery)}"
       />
-      <button class="icon-btn primary" data-action="run-vault-search">Search</button>
+      <button class="btn-icon primary" data-action="run-vault-search">Search</button>
     </div>
-    <div class="workspace-grid">
+    <div style="display:flex;flex-direction:column;gap:10px;margin-top:4px;">
       ${state.vaultResults
         .map(
           (s) => `
         <div class="workspace-card" data-vault-idx="${escapeHtml(s.session_id)}">
-          <div class="card-top-row">
-            ${renderAgentBadge(s.agent)}
-            <span class="ws-cwd">${escapeHtml(s.status || "archived")} · ${escapeHtml((s.modified || "").slice(0, 16).replace("T", " "))}</span>
+          <div class="card-top">
+            <span style="font-weight:600;font-size:14px;">${escapeHtml(s.title || s.session_id)}</span>
+            <span class="tab-badge">${escapeHtml(s.agent)}</span>
           </div>
-          <div class="attention-title">${escapeHtml(s.title || s.session_id)}</div>
-          <div class="ws-cwd">${escapeHtml(shortenPath(s.cwd))}</div>
+          <div class="card-cwd">${escapeHtml(shortenPath(s.cwd))} · ${(s.modified || "").slice(0, 16).replace("T", " ")}</div>
         </div>
       `
         )
@@ -718,110 +665,64 @@ function renderSurfaceScreen() {
     detail?.surface ||
     ws?.surfaces?.find((s) => s.id === state.activeSurfaceId);
 
-  const telemetry = detail?.telemetry;
   const prompt = detail?.detectedPrompt;
 
   return `
-    <div class="surface-screen">
-      <header class="surface-topbar">
-        <div class="topbar-main">
-          <button class="back-btn" data-action="go-home">‹ Deck</button>
-          <button class="ws-Orbit-pill" data-action="open-ws-switcher">
-            <span class="status-ring ${ws?.state || "idle"}"></span>
-            <span class="truncate">${escapeHtml(ws?.title || "Workspace")}</span>
-            <span>▾</span>
-          </button>
-          <div class="mode-segmented">
-            <button class="mode-tab ${state.viewMode === "agent" ? "active" : ""}" data-mode="agent">✦ Agent</button>
-            <button class="mode-tab ${state.viewMode === "terminal" ? "active" : ""}" id="cli-peek-btn" data-mode="terminal" title="Tap for CLI or Hold to X-Ray Peek">&gt;_ CLI</button>
-            <button class="mode-tab ${state.viewMode === "diff" ? "active" : ""}" data-mode="diff">± Diff</button>
-            ${
-              state.docPreview || surf?.kind === "markdown"
-                ? `<button class="mode-tab ${state.viewMode === "markdown" ? "active" : ""}" data-mode="markdown">📄 Doc</button>`
-                : ""
-            }
-          </div>
+    <div class="surface-screen" style="display:flex;flex-direction:column;height:100dvh;overflow:hidden;">
+      <header class="top-nav">
+        <button class="btn-icon" data-action="go-home">‹ Deck</button>
+        <button class="nav-title-group" style="background:none;border:none;cursor:pointer;text-align:left;flex:1;margin:0 4px;" data-action="open-ws-switcher">
+          <span class="nav-title">
+            <span class="status-dot ${ws?.state || "idle"}"></span>
+            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(ws?.title || "Workspace")}</span>
+            <span style="font-size:11px;color:var(--text-muted);flex-shrink:0;">▾</span>
+          </span>
+          <span class="nav-subtitle">${escapeHtml(surf?.title || "")} · ${escapeHtml(shortenPath(surf?.cwd || ws?.cwd || ""))}</span>
+        </button>
+        <div class="nav-actions">
+          <button class="btn-pill ${state.viewMode === "diff" ? "active" : ""}" data-mode="diff">± Diff</button>
+          <button class="btn-icon ${state.viewMode === "terminal" ? "active" : ""}" data-mode="terminal" id="cli-peek-btn" title="Toggle CLI">&gt;_</button>
+          <button class="btn-icon" data-action="open-telemetry" title="Telemetry">ⓘ</button>
         </div>
-
-        ${
-          ws?.surfaces?.length
-            ? `
-          <div class="surface-scrubber">
-            ${ws.surfaces
-              .map((s) => {
-                const meta = AGENT_META[s.agentKind] || AGENT_META.shell;
-                const isAct = s.id === state.activeSurfaceId;
-                return `
-                <button class="scrubber-tab ${isAct ? "active" : ""}" data-open-ws="${ws.id}" data-open-surf="${s.id}">
-                  <span class="status-ring ${s.state}"></span>
-                  <span>${meta.icon}</span>
-                  <span style="overflow:hidden;text-overflow:ellipsis;">${escapeHtml(s.title)}</span>
-                </button>
-              `;
-              })
-              .join("")}
-            <button class="scrubber-tab" data-action="open-spawn" data-target="surface">+ Tab</button>
-          </div>
-        `
-            : ""
-        }
-
-        ${
-          telemetry
-            ? `
-          <div class="telemetry-bar">
-            ${telemetry.model ? `<span class="telemetry-chip accent">✦ ${escapeHtml(telemetry.model)}</span>` : ""}
-            ${telemetry.contextPercent ? `<span class="telemetry-chip">ctx ${escapeHtml(telemetry.contextPercent)}</span>` : ""}
-            ${telemetry.costSession ? `<span class="telemetry-chip">${escapeHtml(telemetry.costSession)}</span>` : ""}
-            ${telemetry.costToday ? `<span class="telemetry-chip">today ${escapeHtml(telemetry.costToday)}</span>` : ""}
-            ${telemetry.permissionMode ? `<span class="telemetry-chip">${escapeHtml(telemetry.permissionMode)}</span>` : ""}
-            ${(telemetry.subagents || [])
-              .map(
-                (w) =>
-                  `<span class="telemetry-chip wave">◯ ${escapeHtml(w.id)}: ${escapeHtml(w.status)}</span>`
-              )
-              .join("")}
-          </div>
-        `
-            : ""
-        }
       </header>
 
-      <main id="surface-viewport" class="surface-viewport">
+      ${
+        ws && ws.surfaces && ws.surfaces.length > 1
+          ? `
+        <nav class="surface-tabs">
+          ${ws.surfaces
+            .map((s) => {
+              const meta = AGENT_META[s.agentKind] || AGENT_META.shell;
+              const isAct = s.id === state.activeSurfaceId;
+              return `
+              <button class="surface-tab ${isAct ? "active" : ""}" data-open-ws="${ws.id}" data-open-surf="${s.id}">
+                <span class="status-dot ${s.state}"></span>
+                <span>${meta.icon}</span>
+                <span style="overflow:hidden;text-overflow:ellipsis;">${escapeHtml(s.title)}</span>
+              </button>
+            `;
+            })
+            .join("")}
+          <button class="surface-tab" data-action="open-spawn" data-target="surface">+ Tab</button>
+        </nav>
+      `
+          : ""
+      }
+
+      <main id="surface-viewport" class="${state.viewMode === "terminal" ? "terminal-view" : state.viewMode === "diff" ? "diff-view" : "conversation-stream"}">
         ${renderSurfaceViewportContent(detail, surf, ws)}
       </main>
 
-      <button id="jump-bottom-btn" class="jump-bottom-btn" onclick="scrollToViewportBottom()">↓ Jump to Bottom</button>
+      <button id="jump-bottom-btn" class="jump-bottom-btn" onclick="scrollToViewportBottom()">↓ Bottom</button>
 
       ${prompt ? renderTuiPromptDeck(prompt, ws?.id, surf?.id) : ""}
 
       <footer class="composer-dock" id="composer-dock">
-        ${
-          state.showKeyStrip || state.viewMode === "terminal"
-            ? `
-          <div class="key-strip">
-            <button class="key-pill" data-send-key="escape">esc</button>
-            <button class="key-pill" data-send-key="ctrl+c">^C</button>
-            <button class="key-pill" data-send-key="tab">tab</button>
-            <button class="key-pill" data-send-key="shift+tab">⇧tab</button>
-            <button class="key-pill" data-send-key="up">↑</button>
-            <button class="key-pill" data-send-key="down">↓</button>
-            <button class="key-pill" data-send-key="left">←</button>
-            <button class="key-pill" data-send-key="right">→</button>
-            <button class="key-pill" data-send-key="space">␣</button>
-            <button class="key-pill" data-send-key="enter">↵</button>
-            <button class="key-pill slash" data-insert-slash="/status">/status</button>
-            <button class="key-pill slash" data-insert-slash="/compact">/compact</button>
-            <button class="key-pill slash" data-insert-slash="/resume">/resume</button>
-          </div>
-        `
-            : ""
-        }
-        <div class="composer-row">
-          <button class="prefix-toggle ${state.composerMode === "shell" ? "shell-mode" : ""}" data-action="toggle-composer-mode">
-            ${state.composerMode === "shell" ? "$ Cmd" : "✦ Ask"}
+        <div class="composer-shell">
+          <button class="composer-tool-btn" data-action="open-shortcuts" title="Signals & Shortcuts">···</button>
+          <button class="composer-tool-btn" data-action="toggle-composer-mode" title="Toggle Ask vs Shell" style="font-size:13px;font-family:var(--font-mono);font-weight:700;">
+            ${state.composerMode === "shell" ? "$" : "✦"}
           </button>
-          <button class="icon-btn" data-action="toggle-keys" title="Toggle Terminal Keys">⌘</button>
           <textarea
             id="composer-textarea"
             class="composer-input"
@@ -832,10 +733,10 @@ function renderSurfaceScreen() {
             placeholder="${
               state.composerMode === "shell"
                 ? "Run shell command (! or raw)…"
-                : `Message ${AGENT_META[surf?.agentKind]?.label || "surface"} or /command…`
+                : `Message ${AGENT_META[surf?.agentKind]?.label || "surface"}…`
             }"
           >${escapeHtml(state.composerText)}</textarea>
-          <button class="send-btn" data-action="submit-composer">↑</button>
+          <button class="composer-send-btn" data-action="submit-composer">↑</button>
         </div>
       </footer>
     </div>
@@ -844,7 +745,7 @@ function renderSurfaceScreen() {
 
 function renderSurfaceViewportContent(detail, surf, ws) {
   if (state.surfaceLoading && !detail) {
-    return `<div class="workspace-card">Loading surface stream…</div>`;
+    return `<div class="workspace-card">Connecting to surface stream…</div>`;
   }
 
   if (state.viewMode === "markdown") {
@@ -854,9 +755,9 @@ function renderSurfaceViewportContent(detail, surf, ws) {
     }
     return `
       <div class="turn-assistant">
-        <div class="turn-header">
+        <div class="turn-author">
           <span>📄 ${escapeHtml(doc.name)}</span>
-          <span>${escapeHtml(shortenPath(doc.path))}</span>
+          <span class="turn-author-badge">${escapeHtml(shortenPath(doc.path))}</span>
         </div>
         <div class="prose">${renderMarkdown(doc.content)}</div>
       </div>
@@ -865,7 +766,7 @@ function renderSurfaceViewportContent(detail, surf, ws) {
 
   if (state.viewMode === "diff") {
     if (state.gitDiffLoading) {
-      return `<div class="workspace-card">Inspecting git status & unified diff…</div>`;
+      return `<div class="workspace-card">Inspecting git status & diff…</div>`;
     }
     const git = state.gitDiffData;
     if (!git || !git.isGitRepo) {
@@ -873,14 +774,14 @@ function renderSurfaceViewportContent(detail, surf, ws) {
     }
     return `
       <div class="workspace-card">
-        <div class="card-top-row">
-          <span style="font-weight:650;">⎇ Branch: ${escapeHtml(git.branch || "HEAD")}</span>
+        <div class="card-top">
+          <span style="font-weight:650;">⎇ ${escapeHtml(git.branch || "HEAD")}</span>
           <span class="diff-stats">
             <span class="diff-add">+${git.totalAdditions}</span>
             <span class="diff-del">-${git.totalDeletions}</span>
           </span>
         </div>
-        <div class="ws-cwd">${escapeHtml(shortenPath(git.cwd))} · ${git.files.length} changed files</div>
+        <div class="card-cwd">${escapeHtml(shortenPath(git.cwd))} · ${git.files.length} changed files</div>
       </div>
       ${
         git.files.length === 0
@@ -896,11 +797,7 @@ function renderSurfaceViewportContent(detail, surf, ws) {
                 <span class="diff-del">-${f.deletions}</span>
               </span>
             </div>
-            ${
-              f.patch
-                ? `<pre class="diff-patch">${formatDiffPatch(f.patch)}</pre>`
-                : ""
-            }
+            ${f.patch ? `<pre class="diff-patch">${formatDiffPatch(f.patch)}</pre>` : ""}
           </div>
         `
               )
@@ -912,27 +809,20 @@ function renderSurfaceViewportContent(detail, surf, ws) {
   if (state.viewMode === "terminal") {
     const rawText = detail?.rawTerminalText || "No terminal buffer output.";
     return `
-      <div class="terminal-container">
-        <div class="terminal-chrome-header">
-          <div class="terminal-dots">
-            <span class="term-dot red"></span>
-            <span class="term-dot yellow"></span>
-            <span class="term-dot green"></span>
-          </div>
-          <span class="terminal-title">${escapeHtml(surf?.title || "Terminal")} · ${escapeHtml(shortenPath(surf?.cwd || ws?.cwd || ""))}</span>
-          <div class="terminal-actions">
-            <button class="icon-btn" id="copy-term-btn" onclick="copyTerminalText()">Copy</button>
-            <button class="icon-btn" data-action="toggle-wrap">${state.terminalWrap ? "⇄ Reflow" : "→ Scroll"}</button>
-            <button class="icon-btn" data-action="font-dec">A-</button>
-            <button class="icon-btn" data-action="font-inc">A+</button>
-          </div>
+      <div class="terminal-header-bar">
+        <span style="font-size:12px;font-family:var(--font-mono);color:var(--text-muted);">${escapeHtml(surf?.title || "Terminal")}</span>
+        <div style="display:flex;gap:6px;">
+          <button class="btn-icon" id="copy-term-btn" onclick="copyTerminalText()">Copy</button>
+          <button class="btn-icon" data-action="toggle-wrap">${state.terminalWrap ? "⇄ Reflow" : "→ Scroll"}</button>
+          <button class="btn-icon" data-action="font-dec">A-</button>
+          <button class="btn-icon" data-action="font-inc">A+</button>
         </div>
-        <pre class="terminal-box ${state.terminalWrap ? "" : "nowrap"}" style="font-size:${state.terminalFontSize}px;">${renderTerminalAnsi(rawText)}</pre>
       </div>
+      <pre class="terminal-box ${state.terminalWrap ? "" : "nowrap"}" style="font-size:${state.terminalFontSize}px;">${renderTerminalAnsi(rawText)}</pre>
     `;
   }
 
-  // Default: Agent-First Reflowed Stream View
+  // Agent Dialogue Stream View
   const messages = detail?.messages || [];
   const detectedFiles = detail?.detectedFiles || [];
   const liveSnippet = detail?.liveProseSnippet || "";
@@ -942,11 +832,11 @@ function renderSurfaceViewportContent(detail, surf, ws) {
     ${
       detectedFiles.length > 0
         ? `
-      <div class="surface-scrubber">
+      <div class="surface-tabs" style="border-bottom:none;padding-top:0;">
         ${detectedFiles
           .map((fp) => {
             const name = fp.split("/").pop();
-            return `<button class="scrubber-tab" data-preview-file="${escapeHtml(fp)}" data-cwd="${escapeHtml(surf?.cwd || ws?.cwd || "")}">📄 ${escapeHtml(name)}</button>`;
+            return `<button class="surface-tab" data-preview-file="${escapeHtml(fp)}" data-cwd="${escapeHtml(surf?.cwd || ws?.cwd || "")}">📄 ${escapeHtml(name)}</button>`;
           })
           .join("")}
       </div>
@@ -958,12 +848,12 @@ function renderSurfaceViewportContent(detail, surf, ws) {
       messages.length === 0
         ? `
       <div class="turn-assistant">
-        <div class="turn-header">
-          <span>${agentMeta.icon} ${agentMeta.label} Surface</span>
-          <span>Live Terminal Stream</span>
+        <div class="turn-author">
+          <span>${agentMeta.icon} ${agentMeta.label}</span>
+          <span class="turn-author-badge">Live</span>
         </div>
         <div class="prose">
-          <p>Showing live reflowed terminal output for <strong>${escapeHtml(surf?.title || "")}</strong>.</p>
+          <p>Showing live reflowed stream for <strong>${escapeHtml(surf?.title || "")}</strong>.</p>
         </div>
       </div>
     `
@@ -974,54 +864,41 @@ function renderSurfaceViewportContent(detail, surf, ws) {
               }
               return `
           <div class="turn-assistant">
-            <div class="turn-header">
+            <div class="turn-author">
               <span>${agentMeta.icon} ${escapeHtml(m.model || agentMeta.label)}</span>
-              <span>${escapeHtml((m.timestamp || "").slice(11, 19))}</span>
+              <span class="turn-author-badge">${escapeHtml((m.timestamp || "").slice(11, 19))}</span>
             </div>
             ${
               m.thinking
                 ? `
-              <details class="thinking-accordion">
-                <summary>
-                  <span>💭 Reasoning / Thought Process</span>
-                  <span>▾</span>
+              <details class="tool-call-row">
+                <summary class="tool-call-summary">
+                  <span>💭 Reasoning</span>
+                  <span style="font-size:10px;">▾</span>
                 </summary>
-                <div class="tool-list">
-                  <div class="tool-item-summary" style="white-space:pre-wrap;">${escapeHtml(m.thinking)}</div>
-                </div>
+                <div class="tool-call-body">${escapeHtml(m.thinking)}</div>
               </details>
             `
                 : ""
             }
             ${
               m.toolCalls && m.toolCalls.length > 0
-                ? `
-              <details class="tool-accordion">
-                <summary>
-                  <span>⚡ ${m.toolCalls.length} tool ${m.toolCalls.length === 1 ? "call" : "calls"} · ${escapeHtml(
-                    Array.from(new Set(m.toolCalls.map((t) => t.name))).slice(0, 3).join(", ")
-                  )}</span>
-                  <span>▾</span>
-                </summary>
-                <div class="tool-list">
-                  ${m.toolCalls
+                ? m.toolCalls
                     .map(
                       (tc) => `
-                    <div class="tool-item">
-                      <div class="tool-item-head">⚡ ${escapeHtml(tc.name)}</div>
-                      <div class="tool-item-summary">${escapeHtml(tc.summary)}</div>
-                      ${
-                        tc.output
-                          ? `<div class="tool-item-output">${escapeHtml(tc.output)}</div>`
-                          : ""
-                      }
-                    </div>
-                  `
+                <details class="tool-call-row">
+                  <summary class="tool-call-summary">
+                    <span>⚡ ${escapeHtml(tc.name)}</span>
+                    <span style="font-size:10px;">▾</span>
+                  </summary>
+                  <div class="tool-call-body">
+                    <div style="font-weight:600;margin-bottom:4px;color:var(--text-primary);">${escapeHtml(tc.summary)}</div>
+                    ${tc.output ? `<div>${escapeHtml(tc.output)}</div>` : ""}
+                  </div>
+                </details>
+              `
                     )
-                    .join("")}
-                </div>
-              </details>
-            `
+                    .join("")
                 : ""
             }
             ${m.text ? `<div class="prose">${renderMarkdown(m.text)}</div>` : ""}
@@ -1034,12 +911,12 @@ function renderSurfaceViewportContent(detail, surf, ws) {
     ${
       liveSnippet
         ? `
-      <div class="live-stream-card">
-        <div class="live-stream-head">
-          <span>● Live Terminal Tail</span>
-          <button class="icon-btn" style="min-height:26px;padding:0 8px;font-size:11px;" data-mode="terminal">Full CLI →</button>
+      <div class="workspace-card" style="margin-top:8px;">
+        <div class="card-top" style="margin-bottom:4px;">
+          <span style="font-size:11px;font-weight:600;color:var(--accent-blue);">● LIVE TERMINAL TAIL</span>
+          <button class="btn-icon" style="height:24px;font-size:11px;" data-mode="terminal">Full CLI →</button>
         </div>
-        <pre class="live-stream-pre">${renderTerminalAnsi(liveSnippet)}</pre>
+        <pre class="terminal-box" style="min-height:auto;max-height:160px;margin:0;padding:8px;font-size:11.5px;">${renderTerminalAnsi(liveSnippet)}</pre>
       </div>
     `
         : ""
@@ -1068,25 +945,18 @@ function formatDiffPatch(patch) {
 
 function renderTuiPromptDeck(prompt, workspaceId, surfaceId) {
   return `
-    <section class="tui-action-deck">
-      <div class="tui-deck-header">
-        <span>⚡ ${escapeHtml(prompt.title)}</span>
-        <button class="icon-btn" style="min-height:26px;padding:0 8px;font-size:11px;" data-action="toggle-keys">⌘ Keys</button>
-      </div>
-      ${
-        prompt.subtitle
-          ? `<div class="ws-cwd">${escapeHtml(prompt.subtitle)}</div>`
-          : ""
-      }
-      <div class="tui-options-grid">
+    <aside class="tui-prompt-dock">
+      <div class="tui-prompt-title">⚡ ${escapeHtml(prompt.title)}</div>
+      ${prompt.subtitle ? `<div class="tui-prompt-subtitle">${escapeHtml(prompt.subtitle)}</div>` : ""}
+      <div class="tui-prompt-buttons">
         ${prompt.options
           .map(
             (opt) => `
           <button
-            class="tui-option-btn ${opt.style || ""}"
+            class="tui-btn ${opt.style || "secondary"}"
             data-answer-key="${escapeHtml(opt.key)}"
-            data-ws="${escapeHtml(workspaceId)}"
-            data-surf="${escapeHtml(surfaceId)}"
+            data-ws="${escapeHtml(workspaceId || "")}"
+            data-surf="${escapeHtml(surfaceId || "")}"
           >
             ${opt.index && prompt.kind === "numbered" ? `${opt.index}. ` : ""}${escapeHtml(opt.label)}
           </button>
@@ -1094,12 +964,104 @@ function renderTuiPromptDeck(prompt, workspaceId, surfaceId) {
           )
           .join("")}
       </div>
-    </section>
+    </aside>
   `;
 }
 
 function renderModal() {
   if (!state.activeModal) return "";
+
+  if (state.activeModal === "shortcuts") {
+    return `
+      <div class="sheet-backdrop" data-action="close-modal">
+        <div class="sheet-panel" onclick="event.stopPropagation()">
+          <div class="sheet-header">
+            <span>Signals & Shortcuts</span>
+            <button class="btn-icon" data-action="close-modal">✕</button>
+          </div>
+          <div class="form-label">Process Signals</div>
+          <div class="shortcut-grid">
+            <button class="shortcut-btn" data-send-key="ctrl+c">^C</button>
+            <button class="shortcut-btn" data-send-key="escape">Esc</button>
+            <button class="shortcut-btn" data-send-key="tab">Tab</button>
+            <button class="shortcut-btn" data-send-key="shift+tab">⇧Tab</button>
+            <button class="shortcut-btn" data-send-key="up">↑</button>
+            <button class="shortcut-btn" data-send-key="down">↓</button>
+            <button class="shortcut-btn" data-send-key="space">Space</button>
+            <button class="shortcut-btn" data-send-key="enter">↵ Enter</button>
+          </div>
+          <div class="form-label" style="margin-top:6px;">Agent Slash Commands</div>
+          <div class="shortcut-grid">
+            <button class="shortcut-btn slash" data-insert-slash="/status">/status</button>
+            <button class="shortcut-btn slash" data-insert-slash="/compact">/compact</button>
+            <button class="shortcut-btn slash" data-insert-slash="/resume">/resume</button>
+            <button class="shortcut-btn slash" data-insert-slash="/model">/model</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  if (state.activeModal === "telemetry") {
+    const telem = state.surfaceDetail?.telemetry || {};
+    return `
+      <div class="sheet-backdrop" data-action="close-modal">
+        <div class="sheet-panel" onclick="event.stopPropagation()">
+          <div class="sheet-header">
+            <span>Session Telemetry</span>
+            <button class="btn-icon" data-action="close-modal">✕</button>
+          </div>
+          <div class="telemetry-grid">
+            <div class="telemetry-item">
+              <span class="telemetry-label">Model</span>
+              <span class="telemetry-val">${escapeHtml(telem.model || "—")}</span>
+            </div>
+            <div class="telemetry-item">
+              <span class="telemetry-label">Context Used</span>
+              <span class="telemetry-val">${escapeHtml(telem.contextPercent || "—")}</span>
+            </div>
+            <div class="telemetry-item">
+              <span class="telemetry-label">Cost (Session)</span>
+              <span class="telemetry-val">${escapeHtml(telem.costSession || "—")}</span>
+            </div>
+            <div class="telemetry-item">
+              <span class="telemetry-label">Cost (Today)</span>
+              <span class="telemetry-val">${escapeHtml(telem.costToday || "—")}</span>
+            </div>
+            <div class="telemetry-item">
+              <span class="telemetry-label">Permission</span>
+              <span class="telemetry-val">${escapeHtml(telem.permissionMode || "Normal")}</span>
+            </div>
+            <div class="telemetry-item">
+              <span class="telemetry-label">Token Rate</span>
+              <span class="telemetry-val">${escapeHtml(telem.tokenSpeed || "—")}</span>
+            </div>
+          </div>
+          ${
+            telem.subagents && telem.subagents.length > 0
+              ? `
+            <div class="form-label" style="margin-top:6px;">Active Subagents (${telem.subagents.length})</div>
+            <div style="display:flex;flex-direction:column;gap:6px;">
+              ${telem.subagents
+                .map(
+                  (sa) => `
+                <div class="workspace-card" style="padding:10px 12px;">
+                  <div class="card-top">
+                    <span style="font-weight:600;font-size:13px;">${escapeHtml(sa.id)}</span>
+                    <span class="tab-badge">${escapeHtml(sa.status)}</span>
+                  </div>
+                </div>
+              `
+                )
+                .join("")}
+            </div>
+          `
+              : ""
+          }
+        </div>
+      </div>
+    `;
+  }
 
   if (state.activeModal === "ws_switcher") {
     const workspaces = state.dashboard?.workspaces || [];
@@ -1108,22 +1070,22 @@ function renderModal() {
         <div class="sheet-panel" onclick="event.stopPropagation()">
           <div class="sheet-header">
             <span>Switch Workspace</span>
-            <button class="icon-btn" data-action="close-modal">✕</button>
+            <button class="btn-icon" data-action="close-modal">✕</button>
           </div>
-          <div class="workspace-grid">
+          <div style="display:flex;flex-direction:column;gap:10px;">
             ${workspaces
               .map((w) => {
                 const primary = w.surfaces.find((s) => s.isFocused) || w.surfaces[0];
                 return `
                 <div class="workspace-card" data-open-ws="${w.id}" data-open-surf="${primary?.id || ""}">
-                  <div class="card-top-row">
+                  <div class="card-top">
                     <div class="ws-title-row">
-                      <span class="status-ring ${w.state}"></span>
+                      <span class="status-dot ${w.state}"></span>
                       <span class="ws-title">${escapeHtml(w.title)}</span>
                     </div>
-                    <span class="badge-count">${w.surfaces.length} tabs</span>
+                    <span class="tab-badge">${w.surfaces.length} tab${w.surfaces.length === 1 ? "" : "s"}</span>
                   </div>
-                  <div class="ws-cwd">${escapeHtml(shortenPath(w.cwd))}</div>
+                  <div class="card-cwd">${escapeHtml(shortenPath(w.cwd))}</div>
                 </div>
               `;
               })
@@ -1143,15 +1105,15 @@ function renderModal() {
       { id: "codex", label: "⚡ Codex", cmd: "codex", desc: "OpenAI reasoning agent" },
       { id: "pi", label: "π Pi Agent", cmd: "pi", desc: "Lightweight coding harness" },
       { id: "agy", label: "▲ Antigravity", cmd: "ag", desc: "Deepmind agentic coding" },
-      { id: "shell", label: ">_ Plain Shell", cmd: "", desc: "Standard zsh terminal" },
+      { id: "shell", label: ">_ Shell", cmd: "", desc: "Standard zsh terminal" },
     ];
 
     return `
       <div class="sheet-backdrop" data-action="close-modal">
         <div class="sheet-panel" onclick="event.stopPropagation()">
           <div class="sheet-header">
-            <span>${sf.target === "workspace" ? "Spawn New Workspace" : "Spawn Surface Tab"}</span>
-            <button class="icon-btn" data-action="close-modal">✕</button>
+            <span>${sf.target === "workspace" ? "Spawn Workspace" : "Spawn Surface Tab"}</span>
+            <button class="btn-icon" data-action="close-modal">✕</button>
           </div>
 
           <div class="preset-grid">
@@ -1159,7 +1121,7 @@ function renderModal() {
               .map(
                 (p) => `
               <button class="preset-btn ${sf.preset === p.id ? "selected" : ""}" data-spawn-preset="${p.id}" data-spawn-cmd="${p.cmd}">
-                <span style="font-weight:650;font-size:14px;">${p.label}</span>
+                <span style="font-weight:650;font-size:13.5px;color:var(--text-primary);">${p.label}</span>
                 <span style="font-size:11px;color:var(--text-muted);">${p.desc}</span>
               </button>
             `
@@ -1168,29 +1130,29 @@ function renderModal() {
           </div>
 
           <div>
-            <div class="section-label" style="margin-bottom:6px;">Working Directory</div>
+            <div class="form-label" style="margin-bottom:6px;">Working Directory</div>
             <input id="spawn-cwd" class="form-input" value="${escapeHtml(sf.cwd)}" placeholder="/Users/felix/Projects/..." />
-            <div class="filter-strip" style="margin-top:6px;">
+            <div style="display:flex;gap:6px;overflow-x:auto;margin-top:6px;">
               ${dirs
                 .map(
                   (d) =>
-                    `<button class="filter-pill" data-pick-dir="${escapeHtml(d.path)}">${escapeHtml(d.label)}</button>`
+                    `<button class="btn-pill" data-pick-dir="${escapeHtml(d.path)}">${escapeHtml(d.label)}</button>`
                 )
                 .join("")}
             </div>
           </div>
 
           <div>
-            <div class="section-label" style="margin-bottom:6px;">Tab / Workspace Title (Optional)</div>
+            <div class="form-label" style="margin-bottom:6px;">Title (Optional)</div>
             <input id="spawn-title" class="form-input" value="${escapeHtml(sf.title)}" placeholder="e.g. Auth Refactor" />
           </div>
 
           <div>
-            <div class="section-label" style="margin-bottom:6px;">Initial Prompt (Optional)</div>
-            <input id="spawn-prompt" class="form-input" value="${escapeHtml(sf.initialPrompt)}" placeholder="Kick off first instruction immediately…" />
+            <div class="form-label" style="margin-bottom:6px;">Initial Prompt (Optional)</div>
+            <input id="spawn-prompt" class="form-input" value="${escapeHtml(sf.initialPrompt)}" placeholder="Kick off instruction immediately…" />
           </div>
 
-          <button class="send-btn" style="width:100%;height:44px;font-size:15px;" data-action="confirm-spawn">
+          <button class="btn-icon primary" style="width:100%;height:44px;font-size:15px;margin-top:4px;" data-action="confirm-spawn">
             Launch ${sf.preset.toUpperCase()} →
           </button>
         </div>
@@ -1205,10 +1167,10 @@ function renderModal() {
         <div class="sheet-panel" onclick="event.stopPropagation()">
           <div class="sheet-header">
             <span>${escapeHtml(s.title || s.session_id)}</span>
-            <button class="icon-btn" data-action="close-modal">✕</button>
+            <button class="btn-icon" data-action="close-modal">✕</button>
           </div>
-          <div class="ws-cwd">${escapeHtml(shortenPath(s.cwd))} · ${escapeHtml(s.agent)}</div>
-          <div style="display:flex;flex-direction:column;gap:10px;max-height:60dvh;overflow-y:auto;">
+          <div class="card-cwd">${escapeHtml(shortenPath(s.cwd))} · ${escapeHtml(s.agent)}</div>
+          <div style="display:flex;flex-direction:column;gap:12px;max-height:60dvh;overflow-y:auto;">
             ${
               state.vaultMessages.length === 0
                 ? `<div class="workspace-card">Loading transcript turns…</div>`
@@ -1233,7 +1195,6 @@ function render() {
   const app = document.getElementById("app");
   if (!app) return;
 
-  // Preserve scroll position of surface-viewport if re-rendering in place
   const prevVp = document.getElementById("surface-viewport");
   const prevScrollTop = prevVp ? prevVp.scrollTop : null;
   const wasNearBottom =
@@ -1252,7 +1213,6 @@ function render() {
     (state.screen === "surface" ? renderSurfaceScreen() : renderMissionControl()) +
     renderModal();
 
-  // Restore scroll and focus
   const nextVp = document.getElementById("surface-viewport");
   if (nextVp && prevScrollTop !== null) {
     nextVp.scrollTop = wasNearBottom ? nextVp.scrollHeight : prevScrollTop;
@@ -1290,7 +1250,7 @@ function bindEvents() {
     });
   });
 
-  // Filter pills
+  // Filter segment items
   document.querySelectorAll("[data-filter]").forEach((el) => {
     el.addEventListener("click", () => {
       hapticTick();
@@ -1353,7 +1313,7 @@ function bindEvents() {
     });
   });
 
-  // TUI Prompt Option Buttons (Optimistic feedback + auto-dismiss)
+  // TUI Prompt Option Buttons
   document.querySelectorAll("[data-answer-key]").forEach((el) => {
     el.addEventListener("click", async () => {
       const key = el.getAttribute("data-answer-key");
@@ -1361,9 +1321,9 @@ function bindEvents() {
       const surfaceId = el.getAttribute("data-surf");
       hapticTick("medium");
 
-      const container = el.closest(".tui-prompt-card");
-      if (container) {
-        container.querySelectorAll("button").forEach((b) => {
+      const dock = el.closest(".tui-prompt-dock");
+      if (dock) {
+        dock.querySelectorAll("button").forEach((b) => {
           b.disabled = true;
           b.style.opacity = "0.45";
         });
@@ -1382,52 +1342,72 @@ function bindEvents() {
   // Viewport interactions: Jump to bottom, swipe across surfaces, dismiss keyboard
   const vp = document.getElementById("surface-viewport");
   if (vp) {
-    vp.addEventListener("scroll", () => {
-      const isUp = vp.scrollHeight - vp.scrollTop - vp.clientHeight > 200;
-      const btn = document.getElementById("jump-bottom-btn");
-      if (btn) btn.classList.toggle("visible", isUp);
-    }, { passive: true });
+    vp.addEventListener(
+      "scroll",
+      () => {
+        const isUp = vp.scrollHeight - vp.scrollTop - vp.clientHeight > 200;
+        const btn = document.getElementById("jump-bottom-btn");
+        if (btn) btn.classList.toggle("visible", isUp);
+      },
+      { passive: true }
+    );
 
-    vp.addEventListener("touchmove", () => {
-      const ta = document.getElementById("composer-textarea");
-      if (ta && document.activeElement === ta) {
-        ta.blur();
-      }
-    }, { passive: true });
+    vp.addEventListener(
+      "touchmove",
+      () => {
+        const ta = document.getElementById("composer-textarea");
+        if (ta && document.activeElement === ta) {
+          ta.blur();
+        }
+      },
+      { passive: true }
+    );
 
     let touchStartX = 0;
     let touchStartY = 0;
-    vp.addEventListener("touchstart", (e) => {
-      if (e.changedTouches?.length) {
-        touchStartX = e.changedTouches[0].clientX;
-        touchStartY = e.changedTouches[0].clientY;
-      }
-    }, { passive: true });
+    vp.addEventListener(
+      "touchstart",
+      (e) => {
+        if (e.changedTouches?.length) {
+          touchStartX = e.changedTouches[0].clientX;
+          touchStartY = e.changedTouches[0].clientY;
+        }
+      },
+      { passive: true }
+    );
 
-    vp.addEventListener("touchend", (e) => {
-      if (e.changedTouches?.length) {
-        const dx = e.changedTouches[0].clientX - touchStartX;
-        const dy = e.changedTouches[0].clientY - touchStartY;
-        if (Math.abs(dx) > 70 && Math.abs(dy) < 45) {
-          const currentWs = state.dashboard?.workspaces?.find((w) => w.id === state.activeWorkspaceId);
-          if (currentWs && currentWs.surfaces.length > 1) {
-            const idx = currentWs.surfaces.findIndex((s) => s.id === state.activeSurfaceId);
-            if (idx !== -1) {
-              if (dx < 0 && idx < currentWs.surfaces.length - 1) {
-                hapticTick();
-                openSurface(currentWs.id, currentWs.surfaces[idx + 1].id);
-              } else if (dx > 0 && idx > 0) {
-                hapticTick();
-                openSurface(currentWs.id, currentWs.surfaces[idx - 1].id);
+    vp.addEventListener(
+      "touchend",
+      (e) => {
+        if (e.changedTouches?.length) {
+          const dx = e.changedTouches[0].clientX - touchStartX;
+          const dy = e.changedTouches[0].clientY - touchStartY;
+          if (Math.abs(dx) > 70 && Math.abs(dy) < 45) {
+            const currentWs = state.dashboard?.workspaces?.find(
+              (w) => w.id === state.activeWorkspaceId
+            );
+            if (currentWs && currentWs.surfaces.length > 1) {
+              const idx = currentWs.surfaces.findIndex(
+                (s) => s.id === state.activeSurfaceId
+              );
+              if (idx !== -1) {
+                if (dx < 0 && idx < currentWs.surfaces.length - 1) {
+                  hapticTick();
+                  openSurface(currentWs.id, currentWs.surfaces[idx + 1].id);
+                } else if (dx > 0 && idx > 0) {
+                  hapticTick();
+                  openSurface(currentWs.id, currentWs.surfaces[idx - 1].id);
+                }
               }
             }
           }
         }
-      }
-    }, { passive: true });
+      },
+      { passive: true }
+    );
   }
 
-  // Key Strip Buttons
+  // Key Strip / Shortcut Buttons
   document.querySelectorAll("[data-send-key]").forEach((el) => {
     el.addEventListener("click", async () => {
       const key = el.getAttribute("data-send-key");
@@ -1437,6 +1417,8 @@ function bindEvents() {
         surfaceId: state.activeSurfaceId,
         key,
       });
+      state.activeModal = null;
+      render();
     });
   });
 
@@ -1445,11 +1427,16 @@ function bindEvents() {
       hapticTick();
       const cmd = el.getAttribute("data-insert-slash");
       const ta = document.getElementById("composer-textarea");
-      if (ta) {
-        ta.value = cmd + " ";
-        state.composerText = ta.value;
-        ta.focus();
-      }
+      state.activeModal = null;
+      render();
+      setTimeout(() => {
+        const nextTa = document.getElementById("composer-textarea");
+        if (nextTa) {
+          nextTa.value = cmd + " ";
+          state.composerText = nextTa.value;
+          nextTa.focus();
+        }
+      }, 50);
     });
   });
 
@@ -1467,6 +1454,14 @@ function bindEvents() {
       } else if (act === "open-ws-switcher") {
         hapticTick();
         state.activeModal = "ws_switcher";
+        render();
+      } else if (act === "open-shortcuts") {
+        hapticTick();
+        state.activeModal = "shortcuts";
+        render();
+      } else if (act === "open-telemetry") {
+        hapticTick();
+        state.activeModal = "telemetry";
         render();
       } else if (act === "open-spawn") {
         hapticTick();
@@ -1488,10 +1483,6 @@ function bindEvents() {
       } else if (act === "toggle-composer-mode") {
         hapticTick();
         state.composerMode = state.composerMode === "ask" ? "shell" : "ask";
-        render();
-      } else if (act === "toggle-keys") {
-        hapticTick();
-        state.showKeyStrip = !state.showKeyStrip;
         render();
       } else if (act === "toggle-wrap") {
         state.terminalWrap = !state.terminalWrap;
@@ -1549,7 +1540,7 @@ function bindEvents() {
     ta.addEventListener("input", () => {
       state.composerText = ta.value;
       ta.style.height = "auto";
-      ta.style.height = Math.min(120, ta.scrollHeight) + "px";
+      ta.style.height = Math.min(110, ta.scrollHeight) + "px";
     });
     ta.addEventListener("keydown", async (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
