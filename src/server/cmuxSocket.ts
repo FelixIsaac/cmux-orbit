@@ -70,10 +70,16 @@ export async function cmuxRpc<T = any>(
   return new Promise<T>((resolve, reject) => {
     let buffer = "";
     let settled = false;
+    let activeSocket: any = null;
 
     const timer = setTimeout(() => {
       if (!settled) {
         settled = true;
+        try {
+          activeSocket?.end();
+        } catch {
+          // ignore
+        }
         reject(new Error(`cmux RPC timeout (${timeoutMs}ms) for method: ${method}`));
       }
     }, timeoutMs);
@@ -82,6 +88,7 @@ export async function cmuxRpc<T = any>(
       unix: socketPath,
       socket: {
         open(socket) {
+          activeSocket = socket;
           socket.write(payload);
         },
         data(socket, chunk) {

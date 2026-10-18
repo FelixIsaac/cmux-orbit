@@ -62,26 +62,48 @@ export function startOrbitServer(port = Number(process.env.PORT || 4400)) {
   eventStream.start();
 
   let broadcastDebounce: any = null;
+  let broadcastPending = false;
   const triggerDashboardBroadcast = () => {
-    if (broadcastDebounce) return;
+    if (broadcastDebounce) {
+      broadcastPending = true;
+      return;
+    }
     broadcastDebounce = setTimeout(async () => {
       broadcastDebounce = null;
-      if (wsClients.size === 0) return;
-      try {
-        const snapshot = await buildDashboardSnapshot();
-        const payload = JSON.stringify({ type: "dashboard", data: snapshot });
-        for (const ws of wsClients) {
-          try {
-            ws.send(payload);
-          } catch {
-            // ignore
+      if (wsClients.size > 0) {
+        try {
+          const snapshot = await buildDashboardSnapshot(true);
+          const payload = JSON.stringify({ type: "dashboard", data: snapshot });
+          for (const ws of wsClients) {
+            try {
+              ws.send(payload);
+            } catch {
+              // ignore
+            }
           }
+        } catch {
+          // ignore
         }
-      } catch {
-        // ignore
+      }
+      if (broadcastPending) {
+        broadcastPending = false;
+        triggerDashboardBroadcast();
       }
     }, 350);
   };
+
+  const surfaceActionQueues = new Map<string, Promise<any>>();
+  function enqueueSurfaceAction<T>(surfaceId: string, task: () => Promise<T>): Promise<T> {
+    const current = surfaceActionQueues.get(surfaceId) || Promise.resolve();
+    const next = current.then(task, task);
+    surfaceActionQueues.set(surfaceId, next);
+    next.finally(() => {
+      if (surfaceActionQueues.get(surfaceId) === next) {
+        surfaceActionQueues.delete(surfaceId);
+      }
+    });
+    return next;
+  }
 
   eventStream.onEvent((evt) => {
     if (evt.type === "ack" || evt.type === "heartbeat") return;
@@ -240,20 +262,22 @@ export function startOrbitServer(port = Number(process.env.PORT || 4400)) {
             if (!workspaceId || !surfaceId || typeof text !== "string") {
               return jsonResponse({ ok: false, error: "workspaceId, surfaceId, and text required" }, 400);
             }
-            await cmuxRpc("surface.focus", { surface_id: surfaceId }).catch(() => null);
-            await cmuxRpc("surface.send_text", {
-              workspace_id: workspaceId,
-              surface_id: surfaceId,
-              text,
-            });
-            if (submit) {
-              await new Promise((r) => setTimeout(r, 60));
-              await cmuxRpc("surface.send_key", {
+            await enqueueSurfaceAction(surfaceId, async () => {
+              await cmuxRpc("surface.focus", { surface_id: surfaceId }).catch(() => null);
+              await cmuxRpc("surface.send_text", {
                 workspace_id: workspaceId,
                 surface_id: surfaceId,
-                key: "enter",
+                text,
               });
-            }
+              if (submit) {
+                await new Promise((r) => setTimeout(r, 60));
+                await cmuxRpc("surface.send_key", {
+                  workspace_id: workspaceId,
+                  surface_id: surfaceId,
+                  key: "enter",
+                });
+              }
+            });
             triggerDashboardBroadcast();
             return jsonResponse({ ok: true });
           }
@@ -263,11 +287,13 @@ export function startOrbitServer(port = Number(process.env.PORT || 4400)) {
             if (!workspaceId || !surfaceId || !key) {
               return jsonResponse({ ok: false, error: "workspaceId, surfaceId, and key required" }, 400);
             }
-            await cmuxRpc("surface.focus", { surface_id: surfaceId }).catch(() => null);
-            await cmuxRpc("surface.send_key", {
-              workspace_id: workspaceId,
-              surface_id: surfaceId,
-              key,
+            await enqueueSurfaceAction(surfaceId, async () => {
+              await cmuxRpc("surface.focus", { surface_id: surfaceId }).catch(() => null);
+              await cmuxRpc("surface.send_key", {
+                workspace_id: workspaceId,
+                surface_id: surfaceId,
+                key,
+              });
             });
             triggerDashboardBroadcast();
             return jsonResponse({ ok: true });
@@ -278,28 +304,30 @@ export function startOrbitServer(port = Number(process.env.PORT || 4400)) {
             if (!workspaceId || !surfaceId || !key) {
               return jsonResponse({ ok: false, error: "workspaceId, surfaceId, and key required" }, 400);
             }
-            await cmuxRpc("surface.focus", { surface_id: surfaceId }).catch(() => null);
-            if (key === "escape" || key === "ctrl+c" || key === "enter") {
-              await cmuxRpc("surface.send_key", {
-                workspace_id: workspaceId,
-                surface_id: surfaceId,
-                key,
-              });
-            } else {
-              await cmuxRpc("surface.send_text", {
-                workspace_id: workspaceId,
-                surface_id: surfaceId,
-                text: String(key),
-              });
-              if (submit) {
-                await new Promise((r) => setTimeout(r, 50));
+            await enqueueSurfaceAction(surfaceId, async () => {
+              await cmuxRpc("surface.focus", { surface_id: surfaceId }).catch(() => null);
+              if (key === "escape" || key === "ctrl+c" || key === "enter") {
                 await cmuxRpc("surface.send_key", {
                   workspace_id: workspaceId,
                   surface_id: surfaceId,
-                  key: "enter",
+                  key,
                 });
+              } else {
+                await cmuxRpc("surface.send_text", {
+                  workspace_id: workspaceId,
+                  surface_id: surfaceId,
+                  text: String(key),
+                });
+                if (submit) {
+                  await new Promise((r) => setTimeout(r, 50));
+                  await cmuxRpc("surface.send_key", {
+                    workspace_id: workspaceId,
+                    surface_id: surfaceId,
+                    key: "enter",
+                  });
+                }
               }
-            }
+            });
             triggerDashboardBroadcast();
             return jsonResponse({ ok: true });
           }

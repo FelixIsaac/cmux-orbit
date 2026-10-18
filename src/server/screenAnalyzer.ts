@@ -47,7 +47,9 @@ export interface ScreenAnalysisResult {
  */
 export function normalizeTerminalText(raw: string): string {
   return raw
-    .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)/g, "") // Strip OSC sequences (hyperlinks, titles, OSC 133)
+    .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "")           // Strip CSI escape sequences
+    .replace(/\x1B[@-Z\\-_]/g, "")                     // Strip 2-byte escape sequences
     .replace(/\u00a0/g, " ")
     .replace(/\r\n/g, "\n");
 }
@@ -149,7 +151,7 @@ export function detectTuiPrompt(rawText: string): DetectedPrompt | null {
   const numberedOptions: { lineIdx: number; index: number; label: string; isSelected: boolean }[] = [];
   for (let i = 0; i < tail.length; i++) {
     const line = tail[i];
-    const m = line.match(/^\s*([❯›>●*])?\s*([1-9])\.\s+(.+?)\s*$/);
+    const m = line.match(/^\s*([❯›>●*])?\s*(?:\[|\()?([0-9]{1,2})(?:\]|\)|\.|\))\s+(.+?)\s*$/);
     if (m) {
       const isSelected = Boolean(m[1]);
       const idx = parseInt(m[2], 10);
@@ -189,7 +191,7 @@ export function detectTuiPrompt(rawText: string): DetectedPrompt | null {
 
       const footerText = tail.slice(group[group.length - 1].lineIdx + 1).join(" ");
       const hasQuestionOrFooter =
-        headerCandidates.some((h) => h.includes("?") || /allow|proceed|select|choose|want|permission|confirm/i.test(h)) ||
+        headerCandidates.some((h) => h.includes("?") || /allow|proceed|select|choose|want|permission|confirm|approve/i.test(h)) ||
         /esc to cancel|enter to select|to navigate|shift\+tab/i.test(footerText) ||
         group.some((g) => g.isSelected);
 
@@ -227,19 +229,104 @@ export function detectTuiPrompt(rawText: string): DetectedPrompt | null {
     }
   }
 
-  // 2. Check for Binary (y/n) or [Y/n] confirmation on the last few non-status lines
+  // 1b. Check for Arrow-Key Menus (no numbers, but cursor `❯` / `›` with item peers)
+  // Example:
+  //   Allow command?
+  // ❯ Allow once
+  //   Allow always for this session
+  //   Deny
+  const arrowItems: { lineIdx: number; label: string; isSelected: boolean }[] = [];
+  let foundCursor = false;
+  for (let i = Math.max(0, tail.length - 14); i < tail.length; i++) {
+    const rawLine = tail[i];
+    const cursorMatch = rawLine.match(/^\s*([❯›>●*])\s{1,4}(.+?)\s*$/);
+    const peerMatch = rawLine.match(/^\s{2,6}([A-Za-z0-9][\w\s.,\-_/()':]+?)\s*$/);
+    if (cursorMatch && !/^[─━═╭╰┌└│]+$/.test(cursorMatch[2])) {
+      foundCursor = true;
+      arrowItems.push({ lineIdx: i, label: cursorMatch[2].trim(), isSelected: true });
+    } else if (foundCursor && peerMatch && !/^[─━═╭╰┌└│]+$/.test(peerMatch[1])) {
+      // Don't treat instructions like "Use arrow keys" as options
+      if (!/arrow keys|to navigate|esc to/i.test(peerMatch[1])) {
+        arrowItems.push({ lineIdx: i, label: peerMatch[1].trim(), isSelected: false });
+      }
+    } else if (arrowItems.length > 0 && !cursorMatch && !peerMatch) {
+      if (arrowItems.length >= 2) break;
+      arrowItems.length = 0;
+      foundCursor = false;
+    }
+  }
+
+  if (arrowItems.length >= 2 && foundCursor) {
+    const firstLineIdx = arrowItems[0].lineIdx;
+    const headerCandidates: string[] = [];
+    for (let j = Math.max(0, firstLineIdx - 4); j < firstLineIdx; j++) {
+      const hl = tail[j].trim();
+      if (hl && !hl.match(/^[─━═╭╰┌└│]+$/)) {
+        headerCandidates.push(hl.replace(/^[│┃]\s*/, "").replace(/\s*[│┃]$/, ""));
+      }
+    }
+    const questionTitle = headerCandidates[headerCandidates.length - 1] || "Select an option";
+    return {
+      kind: "numbered",
+      title: questionTitle,
+      options: arrowItems.map((item, idx) => {
+        const lower = item.label.toLowerCase();
+        let style: "primary" | "secondary" | "danger" = "secondary";
+        if (idx === 0 || lower.startsWith("allow") || lower.startsWith("yes") || lower.startsWith("approve")) {
+          style = idx === 0 ? "primary" : "secondary";
+        }
+        if (lower.startsWith("deny") || lower.startsWith("no") || lower.startsWith("cancel") || lower.startsWith("reject")) {
+          style = "danger";
+        }
+        return {
+          index: idx + 1,
+          key: String(idx + 1),
+          label: item.label,
+          isSelected: item.isSelected,
+          style,
+        };
+      }),
+    };
+  }
+
+  // 2. Check for Binary (y/n), [Y/n], [y/N], (yes/no), [y/n/c] confirmation
   for (let i = tail.length - 1; i >= Math.max(0, tail.length - 8); i--) {
     const line = tail[i].trim();
-    const ynMatch = line.match(/^(.+?)\s*(\(\s*y\/n\s*\)|\[\s*y\/n\s*\]|\(\s*yes\/no\s*\))\s*:?\s*$/i);
+    // Inline prompt: "Do you want to proceed? [y/N]"
+    const ynMatch = line.match(/^(.+?)\s*(\(\s*[yYnNcCaA/]+\s*\)|\[\s*[yYnNcCaA/]+\s*\]|\(\s*yes\/no\s*\)|\[\s*yes\/no\s*\])\s*:?\s*$/i);
     if (ynMatch) {
+      const spec = ynMatch[2].toLowerCase();
+      const hasCancel = spec.includes("c");
+      const defaultNo = ynMatch[2].includes("N") && !ynMatch[2].includes("Y");
       return {
         kind: "binary",
         title: ynMatch[1].trim(),
         options: [
-          { index: 1, key: "y", label: "Yes (y)", isSelected: true, style: "primary" },
-          { index: 2, key: "n", label: "No (n)", isSelected: false, style: "danger" },
+          { index: 1, key: "y", label: "Yes (y)", isSelected: !defaultNo, style: "primary" },
+          { index: 2, key: "n", label: "No (n)", isSelected: defaultNo, style: "danger" },
+          ...(hasCancel ? [{ index: 3, key: "c", label: "Cancel (c)", isSelected: false, style: "secondary" as const }] : []),
         ],
       };
+    }
+
+    // Standalone prompt on its own line: "[y/N]" or "(y/n)"
+    const standAloneMatch = line.match(/^(\(\s*[yYnNcCaA/]+\s*\)|\[\s*[yYnNcCaA/]+\s*\]|\(\s*yes\/no\s*\)|\[\s*yes\/no\s*\])\s*:?\s*$/i);
+    if (standAloneMatch && i > 0) {
+      const prevLine = tail[i - 1].trim();
+      if (prevLine && !/^[─━═╭╰┌└│]+$/.test(prevLine)) {
+        const spec = standAloneMatch[1].toLowerCase();
+        const hasCancel = spec.includes("c");
+        const defaultNo = standAloneMatch[1].includes("N") && !standAloneMatch[1].includes("Y");
+        return {
+          kind: "binary",
+          title: prevLine,
+          options: [
+            { index: 1, key: "y", label: "Yes (y)", isSelected: !defaultNo, style: "primary" },
+            { index: 2, key: "n", label: "No (n)", isSelected: defaultNo, style: "danger" },
+            ...(hasCancel ? [{ index: 3, key: "c", label: "Cancel (c)", isSelected: false, style: "secondary" as const }] : []),
+          ],
+        };
+      }
     }
   }
 

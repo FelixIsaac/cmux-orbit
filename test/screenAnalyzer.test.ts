@@ -78,4 +78,33 @@ ctx: ▓▓▓▓░░░░░░ 37.5% | cmpct: ↻ 10 | blk: 49m
     expect(res.detectedFiles).toContain("src/server/index.ts");
     expect(res.liveProseSnippet).not.toContain("SID: a7e7b95a");
   });
+
+  test("detects arrow-key menus without numbers", () => {
+    const screen = `
+Allow execution of git push?
+❯ Allow once
+  Allow always for this session
+  Deny
+`;
+    const prompt = detectTuiPrompt(screen);
+    expect(prompt).not.toBeNull();
+    expect(prompt?.kind).toBe("numbered");
+    expect(prompt?.options.length).toBe(3);
+    expect(prompt?.options[0].label).toBe("Allow once");
+    expect(prompt?.options[0].isSelected).toBe(true);
+    expect(prompt?.options[2].label).toBe("Deny");
+    expect(prompt?.options[2].style).toBe("danger");
+  });
+
+  test("detects multiline binary prompt with [y/N]", () => {
+    const screen = `
+Do you want to discard unsaved workspace changes?
+[y/N]
+`;
+    const prompt = detectTuiPrompt(screen);
+    expect(prompt).not.toBeNull();
+    expect(prompt?.kind).toBe("binary");
+    expect(prompt?.title).toBe("Do you want to discard unsaved workspace changes?");
+    expect(prompt?.options[1].isSelected).toBe(true); // 'N' was capital, so default is No
+  });
 });

@@ -84,6 +84,20 @@ function escapeHtml(str) {
     .replace(/"/g, "&quot;");
 }
 
+window.copyCodeSnippet = function (btn) {
+  const wrapper = btn.closest(".code-block-wrapper");
+  const code = wrapper ? wrapper.querySelector("code")?.innerText || "" : "";
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(code).then(() => {
+      const orig = btn.innerText;
+      btn.innerText = "✓ Copied";
+      setTimeout(() => {
+        btn.innerText = orig;
+      }, 1800);
+    });
+  }
+};
+
 function renderMarkdown(md) {
   if (!md) return "";
   let text = escapeHtml(md);
@@ -92,10 +106,23 @@ function renderMarkdown(md) {
   const codeBlocks = [];
   text = text.replace(/```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g, (_m, lang, code) => {
     const idx = codeBlocks.length;
+    const cleanCode = code.trimEnd();
     codeBlocks.push(
-      `<pre><code class="lang-${lang || "text"}">${code.trimEnd()}</code></pre>`
+      `<div class="code-block-wrapper"><button class="copy-code-btn" onclick="copyCodeSnippet(this)">Copy</button><pre><code class="lang-${lang || "text"}">${cleanCode}</code></pre></div>`
     );
     return `@@CODEBLOCK_${idx}@@`;
+  });
+
+  // Markdown tables: lines with pipes | a | b |
+  text = text.replace(/((?:^|\n)\|[^\n]+\|\n\|[-:\s|]+\|\n(?:\|[^\n]+\|\n?)+)/g, (match) => {
+    const lines = match.trim().split("\n");
+    if (lines.length < 3) return match;
+    const headerCells = lines[0].split("|").slice(1, -1).map(c => `<th>${c.trim()}</th>`).join("");
+    const bodyRows = lines.slice(2).map(row => {
+      const cells = row.split("|").slice(1, -1).map(c => `<td>${c.trim()}</td>`).join("");
+      return `<tr>${cells}</tr>`;
+    }).join("");
+    return `<div class="table-container"><table><thead><tr>${headerCells}</tr></thead><tbody>${bodyRows}</tbody></table></div>`;
   });
 
   // Inline code
@@ -125,6 +152,7 @@ function renderMarkdown(md) {
       if (
         t.startsWith("<h") ||
         t.startsWith("<ul") ||
+        t.startsWith("<div") ||
         t.startsWith("@@CODEBLOCK_")
       ) {
         return t;
@@ -626,6 +654,8 @@ function renderSurfaceScreen() {
         ${renderSurfaceViewportContent(detail, surf, ws)}
       </main>
 
+      <button id="jump-bottom-btn" class="jump-bottom-btn" onclick="scrollToViewportBottom()">↓ Jump to Bottom</button>
+
       ${prompt ? renderTuiPromptDeck(prompt, ws?.id, surf?.id) : ""}
 
       <footer class="composer-dock" id="composer-dock">
@@ -1070,7 +1100,10 @@ function render() {
     state.composerText = activeTextarea.value;
   }
 
+  const offlineHtml = `<div id="offline-banner" class="offline-banner ${state.connected ? "" : "visible"}">⚠️ Reconnecting to Mac…</div>`;
+
   app.innerHTML =
+    offlineHtml +
     (state.screen === "surface" ? renderSurfaceScreen() : renderMissionControl()) +
     renderModal();
 
@@ -1175,15 +1208,79 @@ function bindEvents() {
     });
   });
 
-  // TUI Prompt Option Buttons
+  // TUI Prompt Option Buttons (Optimistic feedback + auto-dismiss)
   document.querySelectorAll("[data-answer-key]").forEach((el) => {
     el.addEventListener("click", async () => {
       const key = el.getAttribute("data-answer-key");
       const workspaceId = el.getAttribute("data-ws");
       const surfaceId = el.getAttribute("data-surf");
+      hapticTick("medium");
+
+      const container = el.closest(".tui-prompt-card");
+      if (container) {
+        container.querySelectorAll("button").forEach((b) => {
+          b.disabled = true;
+          b.style.opacity = "0.45";
+        });
+        el.style.opacity = "1";
+        el.innerHTML = "✓ " + el.innerHTML;
+      }
+
       await apiPost({ action: "answer_prompt", workspaceId, surfaceId, key });
+      if (state.surfaceDetail?.detectedPrompt) {
+        state.surfaceDetail.detectedPrompt = null;
+        setTimeout(() => render(), 220);
+      }
     });
   });
+
+  // Viewport interactions: Jump to bottom, swipe across surfaces, dismiss keyboard
+  const vp = document.getElementById("surface-viewport");
+  if (vp) {
+    vp.addEventListener("scroll", () => {
+      const isUp = vp.scrollHeight - vp.scrollTop - vp.clientHeight > 200;
+      const btn = document.getElementById("jump-bottom-btn");
+      if (btn) btn.classList.toggle("visible", isUp);
+    }, { passive: true });
+
+    vp.addEventListener("touchmove", () => {
+      const ta = document.getElementById("composer-textarea");
+      if (ta && document.activeElement === ta) {
+        ta.blur();
+      }
+    }, { passive: true });
+
+    let touchStartX = 0;
+    let touchStartY = 0;
+    vp.addEventListener("touchstart", (e) => {
+      if (e.changedTouches?.length) {
+        touchStartX = e.changedTouches[0].clientX;
+        touchStartY = e.changedTouches[0].clientY;
+      }
+    }, { passive: true });
+
+    vp.addEventListener("touchend", (e) => {
+      if (e.changedTouches?.length) {
+        const dx = e.changedTouches[0].clientX - touchStartX;
+        const dy = e.changedTouches[0].clientY - touchStartY;
+        if (Math.abs(dx) > 70 && Math.abs(dy) < 45) {
+          const currentWs = state.dashboard?.workspaces?.find((w) => w.id === state.activeWorkspaceId);
+          if (currentWs && currentWs.surfaces.length > 1) {
+            const idx = currentWs.surfaces.findIndex((s) => s.id === state.activeSurfaceId);
+            if (idx !== -1) {
+              if (dx < 0 && idx < currentWs.surfaces.length - 1) {
+                hapticTick();
+                openSurface(currentWs.id, currentWs.surfaces[idx + 1].id);
+              } else if (dx > 0 && idx > 0) {
+                hapticTick();
+                openSurface(currentWs.id, currentWs.surfaces[idx - 1].id);
+              }
+            }
+          }
+        }
+      }
+    }, { passive: true });
+  }
 
   // Key Strip Buttons
   document.querySelectorAll("[data-send-key]").forEach((el) => {
@@ -1374,6 +1471,20 @@ async function submitSpawn() {
       initialPrompt,
     });
   }
+}
+
+// Dynamic iOS Visual Viewport Keyboard Adjustment
+if (window.visualViewport) {
+  const onViewportChange = () => {
+    const vv = window.visualViewport;
+    const isKeyboardOpen = window.innerHeight - vv.height > 120;
+    document.documentElement.style.setProperty(
+      "--composer-safe-bottom",
+      isKeyboardOpen ? "4px" : "env(safe-area-inset-bottom, 0px)"
+    );
+  };
+  window.visualViewport.addEventListener("resize", onViewportChange);
+  window.visualViewport.addEventListener("scroll", onViewportChange);
 }
 
 // Register Service Worker & Start App

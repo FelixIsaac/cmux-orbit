@@ -4,3 +4,7 @@ dist/
 *.log
 .env
 .env.*
+xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/

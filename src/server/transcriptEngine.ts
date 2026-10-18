@@ -204,6 +204,14 @@ export function resolveTranscriptPath(
   return null;
 }
 
+interface TranscriptCacheEntry {
+  mtimeMs: number;
+  size: number;
+  messages: ConversationMessage[];
+}
+
+const transcriptParseCache = new Map<string, TranscriptCacheEntry>();
+
 /**
  * Reads the last `maxBytes` of a file and returns complete JSONL lines.
  */
@@ -214,12 +222,15 @@ function readTailLines(filePath: string, maxBytes = 600 * 1024): string[] {
       return readFileSync(filePath, "utf8").split("\n").filter(Boolean);
     }
     const fd = openSync(filePath, "r");
-    const buf = Buffer.alloc(maxBytes);
-    readSync(fd, buf, 0, maxBytes, st.size - maxBytes);
-    closeSync(fd);
-    const text = buf.toString("utf8");
-    const firstNl = text.indexOf("\n");
-    return (firstNl !== -1 ? text.slice(firstNl + 1) : text).split("\n").filter(Boolean);
+    try {
+      const buf = Buffer.alloc(maxBytes);
+      readSync(fd, buf, 0, maxBytes, st.size - maxBytes);
+      const text = buf.toString("utf8");
+      const firstNl = text.indexOf("\n");
+      return (firstNl !== -1 ? text.slice(firstNl + 1) : text).split("\n").filter(Boolean);
+    } finally {
+      closeSync(fd);
+    }
   } catch {
     return [];
   }
@@ -281,6 +292,21 @@ export function parseTranscriptFile(
   limitMessages = 60
 ): ConversationMessage[] {
   if (!filePath || !existsSync(filePath)) return [];
+
+  let fileMtime = 0;
+  let fileSize = 0;
+  try {
+    const st = statSync(filePath);
+    fileMtime = st.mtimeMs;
+    fileSize = st.size;
+    const cached = transcriptParseCache.get(filePath);
+    if (cached && cached.mtimeMs === fileMtime && cached.size === fileSize) {
+      return cached.messages.slice(-limitMessages);
+    }
+  } catch {
+    return [];
+  }
+
   const lines = readTailLines(filePath);
   const messages: ConversationMessage[] = [];
   const toolCallMap = new Map<string, ToolCallItem>();
@@ -563,12 +589,18 @@ export function parseTranscriptFile(
         if (text || thinking || tools.length > 0) {
           pushOrMergeAssistant(obj.id || `pi-a-${idx}`, text, thinking || undefined, tools, obj.timestamp, m.model);
         }
+      } else if (m.role === "toolResult" || m.role === "tool") {
+        const tc = toolCallMap.get(m.toolCallId || m.id);
+        if (tc && m.content) {
+          tc.output = (typeof m.content === "string" ? m.content : JSON.stringify(m.content)).slice(0, 1200);
+          tc.status = m.isError ? "error" : "done";
+        }
       }
       continue;
     }
 
     // ---------------------------------------------------------
-    // 4. ANTIGRAVITY (`type: "USER_INPUT" | "PLANNER_RESPONSE"`)
+    // 4. ANTIGRAVITY (`type: "USER_INPUT" | "PLANNER_RESPONSE" | "TOOL_RESULT"`)
     // ---------------------------------------------------------
     if (type === "USER_INPUT" && obj.content) {
       const cleaned = cleanUserText(String(obj.content));
@@ -590,12 +622,14 @@ export function parseTranscriptFile(
       const tools: ToolCallItem[] = [];
       if (Array.isArray(obj.tool_calls)) {
         for (const tcRaw of obj.tool_calls) {
-          tools.push({
+          const tc: ToolCallItem = {
             id: tcRaw.id || `agy-tc-${idx}-${tools.length}`,
             name: tcRaw.name || "tool",
             summary: tcRaw.arguments?.toolSummary || summarizeToolInput(tcRaw.name || "tool", tcRaw.arguments),
             status: "done",
-          });
+          };
+          toolCallMap.set(tc.id, tc);
+          tools.push(tc);
         }
       }
       if (text || thinking || tools.length > 0) {
@@ -603,6 +637,25 @@ export function parseTranscriptFile(
       }
       continue;
     }
+
+    if ((type === "TOOL_RESULT" || type === "TOOL_CALL_RESULT") && (obj.call_id || obj.tool_call_id || obj.id)) {
+      const tc = toolCallMap.get(obj.call_id || obj.tool_call_id || obj.id);
+      if (tc && (obj.content || obj.output || obj.result)) {
+        const out = obj.content || obj.output || obj.result;
+        tc.output = (typeof out === "string" ? out : JSON.stringify(out)).slice(0, 1200);
+        tc.status = obj.status === "ERROR" || obj.is_error ? "error" : "done";
+      }
+      continue;
+    }
+  }
+
+  // Update memoization cache
+  if (fileMtime > 0 && fileSize > 0) {
+    transcriptParseCache.set(filePath, {
+      mtimeMs: fileMtime,
+      size: fileSize,
+      messages,
+    });
   }
 
   return messages.slice(-limitMessages);

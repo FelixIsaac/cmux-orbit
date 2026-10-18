@@ -125,7 +125,10 @@ export async function getVaultSessions(waitIfEmpty = false): Promise<VaultSessio
         }
         return cachedVaultSessions;
       })
-      .catch(() => cachedVaultSessions)
+      .catch(() => {
+        lastVaultFetchMs = Date.now();
+        return cachedVaultSessions;
+      })
       .finally(() => {
         vaultRefreshInFlight = null;
       });
@@ -170,7 +173,32 @@ function mapRawState(raw?: string | null): LifecycleState {
   return "idle";
 }
 
-export async function buildDashboardSnapshot(): Promise<OrbitDashboardSnapshot> {
+let cachedDashboard: { snapshot: OrbitDashboardSnapshot; timestamp: number } | null = null;
+let dashboardInFlight: Promise<OrbitDashboardSnapshot> | null = null;
+
+export async function buildDashboardSnapshot(forceRefresh = false): Promise<OrbitDashboardSnapshot> {
+  const now = Date.now();
+  if (!forceRefresh && cachedDashboard && now - cachedDashboard.timestamp < 1000) {
+    return cachedDashboard.snapshot;
+  }
+  if (!forceRefresh && dashboardInFlight) {
+    return await dashboardInFlight;
+  }
+
+  dashboardInFlight = (async () => {
+    try {
+      const snapshot = await _buildDashboardSnapshotInternal();
+      cachedDashboard = { snapshot, timestamp: Date.now() };
+      return snapshot;
+    } finally {
+      dashboardInFlight = null;
+    }
+  })();
+
+  return await dashboardInFlight;
+}
+
+async function _buildDashboardSnapshotInternal(): Promise<OrbitDashboardSnapshot> {
   const [mobileWsRes, currentRes, vaultSessions] = await Promise.all([
     cmuxRpc<any>("mobile.workspace.list", {}, 3000).catch(() => null),
     cmuxRpc<any>("current.list", {}, 3000).catch(() => null),
