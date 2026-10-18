@@ -20,6 +20,7 @@ const state = {
   screen: "mission", // "mission" | "surface"
   filter: "all", // "all" | "needs_input" | "active" | "vault"
   dashboard: loadCachedDashboard(),
+  dashboardJson: null,
   activeWorkspaceId: null,
   activeSurfaceId: null,
   surfaceDetail: null,
@@ -34,6 +35,7 @@ const state = {
   composerMode: "ask", // "ask" | "shell"
   composerText: "",
   activeModal: null, // null | "spawn" | "ws_switcher" | "shortcuts" | "telemetry" | "vault_preview"
+  openDetails: new Set(), // tracks open <details data-details-id="..."> keys across background updates
   draftsBySurface: {}, // surfaceId -> string draft
   scrollBySurface: {}, // surfaceId -> number scrollTop
   viewModeBySurface: {}, // surfaceId -> string mode
@@ -315,7 +317,7 @@ function connectWebSocket() {
   ws = new WebSocket(`${proto}//${location.host}/ws`);
 
   ws.onopen = () => {
-    state.connected = true;
+    updateConnectionStatus(true);
     if (state.screen === "surface" && state.activeSurfaceId) {
       ws.send(
         JSON.stringify({
@@ -325,18 +327,45 @@ function connectWebSocket() {
         })
       );
     }
-    render();
   };
 
   ws.onmessage = (event) => {
     try {
       const msg = JSON.parse(event.data);
       if (msg.type === "dashboard" && msg.data) {
+        const json = JSON.stringify(msg.data);
+        if (json === state.dashboardJson) {
+          return;
+        }
+        state.dashboardJson = json;
         state.dashboard = msg.data;
         saveCachedDashboard(msg.data);
-        render();
+
+        if (state.screen === "mission") {
+          const vaultInp = document.getElementById("vault-search-input");
+          const hadVaultFocus = document.activeElement === vaultInp;
+          const vaultVal = vaultInp ? vaultInp.value : null;
+
+          const container = document.getElementById("screen-container");
+          if (container) {
+            container.innerHTML = renderMissionControl();
+            bindMissionEvents();
+          }
+
+          if (hadVaultFocus) {
+            const nextInp = document.getElementById("vault-search-input");
+            if (nextInp) {
+              if (vaultVal !== null) nextInp.value = vaultVal;
+              nextInp.focus();
+            }
+          }
+        } else if (state.screen === "surface") {
+          const wsObj = state.dashboard.workspaces?.find((w) => w.id === state.activeWorkspaceId);
+          const surf = state.surfaceDetail?.surface || wsObj?.surfaces?.find((s) => s.id === state.activeSurfaceId);
+          updateHeaderInPlace(wsObj, surf);
+        }
       } else if (msg.type === "surface_detail" && msg.data) {
-        if (msg.data.surface?.id === state.activeSurfaceId) {
+        if (msg.data.surface?.id === state.activeSurfaceId && state.screen === "surface") {
           const wasEmpty = !state.surfaceDetail;
           state.surfaceDetail = msg.data;
           state.surfaceLoading = false;
@@ -345,10 +374,16 @@ function connectWebSocket() {
             if (msg.data.markdownDocument) {
               state.docPreview = msg.data.markdownDocument;
             }
-          }
-          render();
-          if (wasEmpty && state.scrollBySurface[state.activeSurfaceId] === undefined) {
-            scrollToViewportBottom();
+            const container = document.getElementById("screen-container");
+            if (container) {
+              container.innerHTML = renderSurfaceScreen();
+              bindSurfaceEvents();
+            }
+            if (state.scrollBySurface[state.activeSurfaceId] === undefined) {
+              scrollToViewportBottom();
+            }
+          } else {
+            updateSurfaceInPlace(msg.data);
           }
         }
       }
@@ -358,8 +393,7 @@ function connectWebSocket() {
   };
 
   ws.onclose = () => {
-    state.connected = false;
-    render();
+    updateConnectionStatus(false);
     clearTimeout(wsReconnectTimer);
     wsReconnectTimer = setTimeout(connectWebSocket, 1800);
   };
@@ -371,6 +405,18 @@ function connectWebSocket() {
       // ignore
     }
   };
+}
+
+function updateConnectionStatus(connected) {
+  state.connected = connected;
+  const banner = document.getElementById("offline-banner");
+  if (banner) {
+    banner.classList.toggle("visible", !connected);
+  }
+  const dot = document.querySelector("#mission-screen .nav-title .status-dot");
+  if (dot) {
+    dot.className = `status-dot ${connected ? "running" : "idle"}`;
+  }
 }
 
 async function apiPost(body) {
@@ -491,7 +537,10 @@ function goHome(pushHistory = true) {
 async function loadGitDiff(cwd) {
   if (!cwd) return;
   state.gitDiffLoading = true;
-  render();
+  const vp = document.getElementById("surface-viewport");
+  if (vp && state.viewMode === "diff") {
+    vp.innerHTML = `<div class="workspace-card">Inspecting git status & diff…</div>`;
+  }
   try {
     const res = await fetch(`/api/git?cwd=${encodeURIComponent(cwd)}`);
     const json = await res.json();
@@ -502,7 +551,12 @@ async function loadGitDiff(cwd) {
     // ignore
   } finally {
     state.gitDiffLoading = false;
-    render();
+    if (vp && state.viewMode === "diff") {
+      const ws = state.dashboard?.workspaces?.find((w) => w.id === state.activeWorkspaceId);
+      const surf = state.surfaceDetail?.surface || ws?.surfaces?.find((s) => s.id === state.activeSurfaceId);
+      vp.innerHTML = renderSurfaceViewportContent(state.surfaceDetail, surf, ws);
+      bindViewportEvents();
+    }
   }
 }
 
@@ -516,7 +570,14 @@ async function openFilePreview(filePath, cwd) {
     if (json.ok && json.data) {
       state.docPreview = json.data;
       state.viewMode = "markdown";
-      render();
+      const vp = document.getElementById("surface-viewport");
+      if (vp) {
+        const ws = state.dashboard?.workspaces?.find((w) => w.id === state.activeWorkspaceId);
+        const surf = state.surfaceDetail?.surface || ws?.surfaces?.find((s) => s.id === state.activeSurfaceId);
+        vp.innerHTML = renderSurfaceViewportContent(state.surfaceDetail, surf, ws);
+        bindViewportEvents();
+        vp.scrollTop = 0;
+      }
     }
   } catch {
     // ignore
@@ -529,7 +590,13 @@ async function fetchVaultSessions(query = "") {
     const json = await res.json();
     if (json.ok) {
       state.vaultResults = json.data || [];
-      render();
+      if (state.screen === "mission" && state.filter === "vault") {
+        const container = document.getElementById("screen-container");
+        if (container) {
+          container.innerHTML = renderMissionControl();
+          bindMissionEvents();
+        }
+      }
     }
   } catch {
     // ignore
@@ -540,8 +607,7 @@ async function openVaultSessionModal(session) {
   hapticTick();
   state.vaultSelectedSession = session;
   state.vaultMessages = [];
-  state.activeModal = "vault_preview";
-  render();
+  openModal("vault_preview");
   try {
     const res = await fetch(
       `/api/vault/transcript?file=${encodeURIComponent(session.file)}&agent=${encodeURIComponent(session.agent)}`
@@ -549,7 +615,13 @@ async function openVaultSessionModal(session) {
     const json = await res.json();
     if (json.ok) {
       state.vaultMessages = json.data || [];
-      render();
+      if (state.activeModal === "vault_preview") {
+        const root = document.getElementById("modal-root");
+        if (root) {
+          root.innerHTML = renderModal();
+          bindModalEvents();
+        }
+      }
     }
   } catch {
     // ignore
@@ -575,15 +647,17 @@ function renderMissionControl() {
   const dash = state.dashboard;
   if (!dash) {
     return `
-      <header class="top-nav">
-        <div class="nav-title-group">
-          <span class="nav-title"><span class="status-dot ${state.connected ? "running" : "idle"}"></span> Orbit</span>
-          <span class="nav-subtitle">Connecting to cmux.sock on Mac…</span>
-        </div>
-      </header>
-      <main class="content-area">
-        <div class="workspace-card">Establishing bridge to cmux…</div>
-      </main>
+      <div id="mission-screen" style="display:flex;flex-direction:column;min-height:100dvh;">
+        <header class="top-nav">
+          <div class="nav-title-group">
+            <span class="nav-title"><span class="status-dot ${state.connected ? "running" : "idle"}"></span> Orbit</span>
+            <span class="nav-subtitle">Connecting to cmux.sock on Mac…</span>
+          </div>
+        </header>
+        <main class="content-area">
+          <div class="workspace-card">Establishing bridge to cmux…</div>
+        </main>
+      </div>
     `;
   }
 
@@ -598,112 +672,114 @@ function renderMissionControl() {
   }
 
   return `
-    <header class="top-nav">
-      <div class="nav-title-group">
-        <span class="nav-title">
-          <span class="status-dot ${state.connected ? "running" : "idle"}"></span>
-          Orbit
-        </span>
-        <span class="nav-subtitle">${dash.totalWorkspaces} workspaces · ${dash.totalSurfaces} surfaces</span>
-      </div>
-      <div class="nav-actions">
-        <button class="btn-icon" data-action="refresh-dash" title="Refresh">↻</button>
-        <button class="btn-icon primary" data-action="open-spawn" data-target="workspace">+ New</button>
-      </div>
-    </header>
+    <div id="mission-screen" style="display:flex;flex-direction:column;min-height:100dvh;">
+      <header class="top-nav">
+        <div class="nav-title-group">
+          <span class="nav-title">
+            <span class="status-dot ${state.connected ? "running" : "idle"}"></span>
+            Orbit
+          </span>
+          <span class="nav-subtitle">${dash.totalWorkspaces} workspaces · ${dash.totalSurfaces} surfaces</span>
+        </div>
+        <div class="nav-actions">
+          <button class="btn-icon" data-action="refresh-dash" title="Refresh">↻</button>
+          <button class="btn-icon primary" data-action="open-spawn" data-target="workspace">+ New</button>
+        </div>
+      </header>
 
-    <nav class="segment-bar">
-      <button class="segment-item ${state.filter === "all" ? "active" : ""}" data-filter="all">
-        All (${dash.totalWorkspaces})
-      </button>
-      <button class="segment-item ${state.filter === "needs_input" ? "active" : ""}" data-filter="needs_input">
-        Input${dash.needsInputCount > 0 ? ` (${dash.needsInputCount})` : ""}
-      </button>
-      <button class="segment-item ${state.filter === "active" ? "active" : ""}" data-filter="active">
-        Active (${dash.runningCount + dash.unreadCount})
-      </button>
-      <button class="segment-item ${state.filter === "vault" ? "active" : ""}" data-filter="vault">
-        Vault
-      </button>
-    </nav>
+      <nav class="segment-bar">
+        <button class="segment-item ${state.filter === "all" ? "active" : ""}" data-filter="all">
+          All (${dash.totalWorkspaces})
+        </button>
+        <button class="segment-item ${state.filter === "needs_input" ? "active" : ""}" data-filter="needs_input">
+          Input${dash.needsInputCount > 0 ? ` (${dash.needsInputCount})` : ""}
+        </button>
+        <button class="segment-item ${state.filter === "active" ? "active" : ""}" data-filter="active">
+          Active (${dash.runningCount + dash.unreadCount})
+        </button>
+        <button class="segment-item ${state.filter === "vault" ? "active" : ""}" data-filter="vault">
+          Vault
+        </button>
+      </nav>
 
-    <main class="content-area">
-      ${
-        state.filter === "vault"
-          ? renderVaultView()
-          : `
+      <main class="content-area">
         ${
-          attentionList.length > 0 && (state.filter === "all" || state.filter === "needs_input")
-            ? `
-          <div class="section-header" style="color:var(--status-amber);">⚡ ACTION REQUIRED (${attentionList.length})</div>
-          ${attentionList
-            .map(
-              (item) => `
-            <div class="attention-banner" data-open-ws="${item.workspaceId}" data-open-surf="${item.surfaceId}">
-              <div class="attention-head">
-                <div class="attention-eyebrow">
-                  <span class="status-dot needs_input"></span>
-                  <span>Permission Request</span>
+          state.filter === "vault"
+            ? renderVaultView()
+            : `
+          ${
+            attentionList.length > 0 && (state.filter === "all" || state.filter === "needs_input")
+              ? `
+            <div class="section-header" style="color:var(--status-amber);">⚡ ACTION REQUIRED (${attentionList.length})</div>
+            ${attentionList
+              .map(
+                (item) => `
+              <div class="attention-banner" data-open-ws="${item.workspaceId}" data-open-surf="${item.surfaceId}">
+                <div class="attention-head">
+                  <div class="attention-eyebrow">
+                    <span class="status-dot needs_input"></span>
+                    <span>Permission Request</span>
+                  </div>
+                  <span class="attention-tag">${escapeHtml(item.workspaceTitle)}</span>
                 </div>
-                <span class="attention-tag">${escapeHtml(item.workspaceTitle)}</span>
+                <div class="attention-body">${escapeHtml(item.summary || item.surfaceTitle)}</div>
+                <div class="attention-meta">
+                  <span>${renderAgentBadge(item.agentKind)}</span>
+                  <span>${escapeHtml(item.surfaceTitle)}</span>
+                </div>
+                <div class="attention-actions">
+                  <button class="tui-btn primary" data-quick-key="1" data-ws="${item.workspaceId}" data-surf="${item.surfaceId}">
+                    ✓ Allow (1)
+                  </button>
+                  <button class="tui-btn secondary" data-quick-key="escape" data-ws="${item.workspaceId}" data-surf="${item.surfaceId}">
+                    ✕ Deny (Esc)
+                  </button>
+                  <button class="tui-btn ghost" data-open-ws="${item.workspaceId}" data-open-surf="${item.surfaceId}">
+                    Inspect →
+                  </button>
+                </div>
               </div>
-              <div class="attention-body">${escapeHtml(item.summary || item.surfaceTitle)}</div>
-              <div class="attention-meta">
-                <span>${renderAgentBadge(item.agentKind)}</span>
-                <span>${escapeHtml(item.surfaceTitle)}</span>
+            `
+              )
+              .join("")}
+          `
+              : state.filter === "all"
+              ? `
+            <div class="zen-banner">
+              <div class="zen-left">
+                <span class="status-dot running"></span>
+                <span>All Systems Operational</span>
               </div>
-              <div class="attention-actions">
-                <button class="tui-btn primary" data-quick-key="1" data-ws="${item.workspaceId}" data-surf="${item.surfaceId}">
-                  ✓ Allow (1)
-                </button>
-                <button class="tui-btn secondary" data-quick-key="escape" data-ws="${item.workspaceId}" data-surf="${item.surfaceId}">
-                  ✕ Deny (Esc)
-                </button>
-                <button class="tui-btn ghost" data-open-ws="${item.workspaceId}" data-open-surf="${item.surfaceId}">
-                  Inspect →
-                </button>
-              </div>
+              <span class="zen-sub">${dash.runningCount} active · ${dash.totalWorkspaces} workspaces</span>
             </div>
           `
-            )
+              : ""
+          }
+
+          <div class="section-header">Workspaces</div>
+
+          ${workspaces
+            .map((ws) => {
+              const primarySurf = ws.surfaces.find((s) => s.isFocused) || ws.surfaces[0];
+              return `
+              <div class="workspace-card" data-open-ws="${ws.id}" data-open-surf="${primarySurf?.id || ""}">
+                <div class="card-top">
+                  <div class="ws-title-row">
+                    <span class="status-dot ${ws.state}"></span>
+                    <span class="ws-title">${escapeHtml(ws.title)}</span>
+                  </div>
+                  <span class="tab-badge">${ws.surfaces.length} tab${ws.surfaces.length === 1 ? "" : "s"}</span>
+                </div>
+                <div class="card-cwd">${escapeHtml(shortenPath(ws.cwd))}</div>
+                ${ws.preview ? `<div class="card-snippet">${escapeHtml(ws.preview)}</div>` : ""}
+              </div>
+            `;
+            })
             .join("")}
         `
-            : state.filter === "all"
-            ? `
-          <div class="zen-banner">
-            <div class="zen-left">
-              <span class="status-dot running"></span>
-              <span>All Systems Operational</span>
-            </div>
-            <span class="zen-sub">${dash.runningCount} active · ${dash.totalWorkspaces} workspaces</span>
-          </div>
-        `
-            : ""
         }
-
-        <div class="section-header">Workspaces</div>
-
-        ${workspaces
-          .map((ws) => {
-            const primarySurf = ws.surfaces.find((s) => s.isFocused) || ws.surfaces[0];
-            return `
-            <div class="workspace-card" data-open-ws="${ws.id}" data-open-surf="${primarySurf?.id || ""}">
-              <div class="card-top">
-                <div class="ws-title-row">
-                  <span class="status-dot ${ws.state}"></span>
-                  <span class="ws-title">${escapeHtml(ws.title)}</span>
-                </div>
-                <span class="tab-badge">${ws.surfaces.length} tab${ws.surfaces.length === 1 ? "" : "s"}</span>
-              </div>
-              <div class="card-cwd">${escapeHtml(shortenPath(ws.cwd))}</div>
-              ${ws.preview ? `<div class="card-snippet">${escapeHtml(ws.preview)}</div>` : ""}
-            </div>
-          `;
-          })
-          .join("")}
-      `
-      }
-    </main>
+      </main>
+    </div>
   `;
 }
 
@@ -737,6 +813,33 @@ function renderVaultView() {
   `;
 }
 
+function renderSurfaceTabs(ws) {
+  if (!ws || !ws.surfaces || ws.surfaces.length <= 1) return "";
+  return `
+    ${ws.surfaces
+      .map((s) => {
+        const meta = AGENT_META[s.agentKind] || AGENT_META.shell;
+        const isAct = s.id === state.activeSurfaceId;
+        const dotState = isAct
+          ? s.state
+          : s.state === "needs_input"
+          ? "needs_input"
+          : s.hasUnread
+          ? "unread"
+          : "idle";
+        return `
+        <button class="surface-tab ${isAct ? "active" : ""}" data-open-ws="${ws.id}" data-open-surf="${s.id}" title="${escapeHtml(s.title)}">
+          <span class="status-dot ${dotState}"></span>
+          <span>${meta.icon}</span>
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(s.title)}</span>
+        </button>
+      `;
+      })
+      .join("")}
+    <button class="surface-tab" data-action="open-spawn" data-target="surface">+ Tab</button>
+  `;
+}
+
 function renderSurfaceScreen() {
   const dash = state.dashboard;
   const ws =
@@ -758,11 +861,11 @@ function renderSurfaceScreen() {
         <button class="btn-icon" data-action="go-home">‹ Deck</button>
         <button class="nav-title-group" style="background:none;border:none;cursor:pointer;text-align:left;flex:1;margin:0 4px;min-width:0;" data-action="open-ws-switcher">
           <span class="nav-title">
-            <span class="status-dot ${ws?.state || "idle"}"></span>
-            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(ws?.title || "Workspace")}</span>
+            <span id="header-ws-dot" class="status-dot ${ws?.state || "idle"}"></span>
+            <span id="header-ws-title" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(ws?.title || "Workspace")}</span>
             <span style="font-size:11px;color:var(--text-muted);flex-shrink:0;">▾</span>
           </span>
-          <span class="nav-subtitle" style="max-width:260px;">${escapeHtml(surf?.title || "")} · ${escapeHtml(shortenPath(surf?.cwd || ws?.cwd || ""))}</span>
+          <span id="header-subtitle" class="nav-subtitle" style="max-width:260px;">${escapeHtml(surf?.title || "")} · ${escapeHtml(shortenPath(surf?.cwd || ws?.cwd || ""))}</span>
         </button>
         <div class="nav-actions">
           <button class="btn-pill ${state.viewMode === "diff" ? "active" : ""}" data-mode="diff">± Diff</button>
@@ -771,46 +874,21 @@ function renderSurfaceScreen() {
         </div>
       </header>
 
-      ${
-        ws && ws.surfaces && ws.surfaces.length > 1
-          ? `
-        <nav class="surface-tabs">
-          ${ws.surfaces
-            .map((s) => {
-              const meta = AGENT_META[s.agentKind] || AGENT_META.shell;
-              const isAct = s.id === state.activeSurfaceId;
-              const dotState = isAct
-                ? s.state
-                : s.state === "needs_input"
-                ? "needs_input"
-                : s.hasUnread
-                ? "unread"
-                : "idle";
-              return `
-              <button class="surface-tab ${isAct ? "active" : ""}" data-open-ws="${ws.id}" data-open-surf="${s.id}" title="${escapeHtml(s.title)}">
-                <span class="status-dot ${dotState}"></span>
-                <span>${meta.icon}</span>
-                <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(s.title)}</span>
-              </button>
-            `;
-            })
-            .join("")}
-          <button class="surface-tab" data-action="open-spawn" data-target="surface">+ Tab</button>
-        </nav>
-      `
-          : ""
-      }
+      <nav id="surface-tabs-container" class="surface-tabs" style="${ws && ws.surfaces && ws.surfaces.length > 1 ? "" : "display:none;"}">
+        ${renderSurfaceTabs(ws)}
+      </nav>
 
       <main id="surface-viewport" class="${state.viewMode === "terminal" ? "terminal-view" : state.viewMode === "diff" ? "diff-view" : "conversation-stream"}">
         ${renderSurfaceViewportContent(detail, surf, ws)}
       </main>
 
       <button id="jump-bottom-btn" class="jump-bottom-btn" onclick="scrollToViewportBottom()">
-        ${isRunning ? `<span class="status-dot running" style="width:6px;height:6px;"></span>` : ""}
-        ↓ Latest
+        ${isRunning ? `<span class="status-dot running" style="width:6px;height:6px;"></span> ` : ""}↓ Latest
       </button>
 
-      ${prompt ? renderTuiPromptDeck(prompt, ws?.id, surf?.id) : ""}
+      <div id="tui-prompt-dock-container">
+        ${prompt ? renderTuiPromptDeck(prompt, ws?.id, surf?.id) : ""}
+      </div>
 
       <footer class="composer-dock" id="composer-dock">
         <div class="composer-shell">
@@ -849,12 +927,14 @@ function cleanToolSummary(summary) {
   return s;
 }
 
-function renderGroupedToolCalls(toolCalls) {
+function renderGroupedToolCalls(toolCalls, turnKey = "t0") {
   if (!toolCalls || toolCalls.length === 0) return "";
   if (toolCalls.length === 1) {
     const tc = toolCalls[0];
+    const detailsId = `tool-single-${turnKey}-${tc.name}`;
+    const isOpen = state.openDetails.has(detailsId);
     return `
-      <details class="tool-call-row">
+      <details class="tool-call-row" data-details-id="${escapeHtml(detailsId)}" ${isOpen ? "open" : ""}>
         <summary class="tool-call-summary">
           <div style="display:flex;align-items:center;gap:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;">
             <span>⚡</span>
@@ -870,9 +950,11 @@ function renderGroupedToolCalls(toolCalls) {
     `;
   }
 
+  const groupKey = `tool-group-${turnKey}`;
+  const isGroupOpen = state.openDetails.has(groupKey);
   const types = Array.from(new Set(toolCalls.map((t) => t.name))).join(", ");
   return `
-    <details class="tool-call-group">
+    <details class="tool-call-group" data-details-id="${escapeHtml(groupKey)}" ${isGroupOpen ? "open" : ""}>
       <summary class="tool-group-summary">
         <div class="tool-group-left">
           <span>⚡</span>
@@ -1015,10 +1097,13 @@ function renderSurfaceViewportContent(detail, surf, ws) {
       </div>
     `
         : messages
-            .map((m) => {
+            .map((m, mIdx) => {
               if (m.role === "user") {
                 return `<div class="turn-user">${escapeHtml(m.text)}</div>`;
               }
+              const turnKey = m.timestamp ? m.timestamp.replace(/[^a-zA-Z0-9_-]/g, "_") : `turn-${mIdx}`;
+              const reasoningKey = `reasoning-${turnKey}`;
+              const isReasoningOpen = state.openDetails.has(reasoningKey);
               return `
           <div class="turn-assistant">
             <div class="turn-author">
@@ -1028,7 +1113,7 @@ function renderSurfaceViewportContent(detail, surf, ws) {
             ${
               m.thinking
                 ? `
-              <details class="tool-call-row">
+              <details class="tool-call-row" data-details-id="${escapeHtml(reasoningKey)}" ${isReasoningOpen ? "open" : ""}>
                 <summary class="tool-call-summary">
                   <span>💭 Reasoning</span>
                   <span class="chevron">▾</span>
@@ -1040,7 +1125,7 @@ function renderSurfaceViewportContent(detail, surf, ws) {
             }
             ${
               m.toolCalls && m.toolCalls.length > 0
-                ? renderGroupedToolCalls(m.toolCalls)
+                ? renderGroupedToolCalls(m.toolCalls, turnKey)
                 : ""
             }
             ${m.text ? `<div class="prose">${renderMarkdown(m.text)}</div>` : ""}
@@ -1359,8 +1444,8 @@ function renderModal() {
 }
 
 function render() {
-  const app = document.getElementById("app");
-  if (!app) return;
+  const container = document.getElementById("screen-container");
+  if (!container) return;
 
   const prevVp = document.getElementById("surface-viewport");
   const prevScrollTop = prevVp ? prevVp.scrollTop : null;
@@ -1374,51 +1459,211 @@ function render() {
     state.draftsBySurface[state.activeSurfaceId] = activeTextarea.value;
   }
 
-  const offlineHtml = `<div id="offline-banner" class="offline-banner ${state.connected ? "" : "visible"}">⚠️ Reconnecting to Mac…</div>`;
+  if (state.screen === "surface") {
+    container.innerHTML = renderSurfaceScreen();
+    bindSurfaceEvents();
 
-  app.innerHTML =
-    offlineHtml +
-    (state.screen === "surface" ? renderSurfaceScreen() : renderMissionControl()) +
-    renderModal();
+    const nextVp = document.getElementById("surface-viewport");
+    if (nextVp) {
+      const savedScroll = state.activeSurfaceId ? state.scrollBySurface[state.activeSurfaceId] : null;
+      if (savedScroll !== null && savedScroll !== undefined) {
+        nextVp.scrollTop = savedScroll;
+      } else if (prevScrollTop !== null) {
+        nextVp.scrollTop = wasNearBottom ? nextVp.scrollHeight : prevScrollTop;
+      }
+    }
 
-  const nextVp = document.getElementById("surface-viewport");
-  if (nextVp) {
-    const savedScroll = state.activeSurfaceId ? state.scrollBySurface[state.activeSurfaceId] : null;
-    if (savedScroll !== null && savedScroll !== undefined) {
-      nextVp.scrollTop = savedScroll;
-    } else if (prevScrollTop !== null) {
-      nextVp.scrollTop = wasNearBottom ? nextVp.scrollHeight : prevScrollTop;
+    const nextTextarea = document.getElementById("composer-textarea");
+    if (nextTextarea && hadFocus) {
+      nextTextarea.focus();
+      nextTextarea.selectionStart = nextTextarea.selectionEnd = nextTextarea.value.length;
+    }
+
+    const activeTab = document.querySelector(".surface-tab.active");
+    if (activeTab) {
+      activeTab.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+    }
+  } else {
+    container.innerHTML = renderMissionControl();
+    bindMissionEvents();
+  }
+
+  // Update modal root
+  const modalRoot = document.getElementById("modal-root");
+  if (modalRoot) {
+    if (state.activeModal) {
+      modalRoot.innerHTML = renderModal();
+      bindModalEvents();
+    } else {
+      modalRoot.innerHTML = "";
     }
   }
 
-  const nextTextarea = document.getElementById("composer-textarea");
-  if (nextTextarea && hadFocus) {
-    nextTextarea.focus();
-    nextTextarea.selectionStart = nextTextarea.selectionEnd = nextTextarea.value.length;
+  // Update offline banner
+  const banner = document.getElementById("offline-banner");
+  if (banner) {
+    banner.classList.toggle("visible", !state.connected);
   }
-
-  // Smoothly center active surface tab in header
-  const activeTab = document.querySelector(".surface-tab.active");
-  if (activeTab) {
-    activeTab.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
-  }
-
-  bindEvents();
 }
 
-function bindEvents() {
-  // Open workspace/surface
-  document.querySelectorAll("[data-open-surf]").forEach((el) => {
-    el.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const wsId = el.getAttribute("data-open-ws");
-      const surfId = el.getAttribute("data-open-surf");
-      state.activeModal = null;
-      if (surfId) openSurface(wsId, surfId);
+function updateSurfaceInPlace(detail) {
+  if (state.screen !== "surface" || !detail) return;
+  if (detail.surface?.id !== state.activeSurfaceId) return;
+
+  state.surfaceDetail = detail;
+  state.surfaceLoading = false;
+
+  const ws = state.dashboard?.workspaces?.find((w) => w.id === state.activeWorkspaceId);
+  const surf = detail.surface || ws?.surfaces?.find((s) => s.id === state.activeSurfaceId);
+
+  // 1. Header Dot, Title, and Subtitle
+  const dot = document.getElementById("header-ws-dot");
+  if (dot && ws) {
+    dot.className = `status-dot ${ws.state || "idle"}`;
+  }
+  const title = document.getElementById("header-ws-title");
+  if (title && ws?.title) {
+    title.textContent = ws.title;
+  }
+  const sub = document.getElementById("header-subtitle");
+  if (sub && surf) {
+    sub.textContent = `${surf.title || ""} · ${shortenPath(surf.cwd || ws?.cwd || "")}`;
+  }
+
+  // 2. Surface Tabs
+  const tabsContainer = document.getElementById("surface-tabs-container");
+  if (tabsContainer && ws) {
+    if (ws.surfaces && ws.surfaces.length > 1) {
+      tabsContainer.style.display = "";
+      const tabsHtml = renderSurfaceTabs(ws);
+      if (tabsContainer.innerHTML !== tabsHtml) {
+        tabsContainer.innerHTML = tabsHtml;
+        bindTabsEvents();
+      }
+    } else {
+      tabsContainer.style.display = "none";
+    }
+  }
+
+  // 3. Jump Bottom Button Running Dot
+  const jumpBtn = document.getElementById("jump-bottom-btn");
+  if (jumpBtn) {
+    const isRunning = surf?.state === "running";
+    jumpBtn.innerHTML = `${isRunning ? '<span class="status-dot running" style="width:6px;height:6px;"></span> ' : ""}↓ Latest`;
+  }
+
+  // 4. TUI Prompt Dock
+  const promptContainer = document.getElementById("tui-prompt-dock-container");
+  if (promptContainer) {
+    const newPromptHtml = detail.detectedPrompt
+      ? renderTuiPromptDeck(detail.detectedPrompt, ws?.id, surf?.id)
+      : "";
+    if (promptContainer.innerHTML.trim() !== newPromptHtml.trim()) {
+      promptContainer.innerHTML = newPromptHtml;
+      bindPromptEvents();
+    }
+  }
+
+  // 5. Surface Viewport Content
+  const vp = document.getElementById("surface-viewport");
+  if (vp) {
+    const newContentHtml = renderSurfaceViewportContent(detail, surf, ws);
+    if (vp.innerHTML !== newContentHtml) {
+      const isNearBottom = vp.scrollHeight - vp.scrollTop - vp.clientHeight < 80;
+      const prevScrollTop = vp.scrollTop;
+
+      vp.innerHTML = newContentHtml;
+
+      if (isNearBottom) {
+        vp.scrollTop = vp.scrollHeight;
+      } else {
+        vp.scrollTop = prevScrollTop;
+      }
+
+      bindViewportEvents();
+    }
+  }
+  // Composer textarea and buttons are completely preserved without redraw!
+}
+
+function updateHeaderInPlace(ws, surf) {
+  const dot = document.getElementById("header-ws-dot");
+  if (dot && ws) {
+    dot.className = `status-dot ${ws.state || "idle"}`;
+  }
+  const title = document.getElementById("header-ws-title");
+  if (title && ws?.title) {
+    title.textContent = ws.title;
+  }
+  const sub = document.getElementById("header-subtitle");
+  if (sub && surf) {
+    sub.textContent = `${surf.title || ""} · ${shortenPath(surf.cwd || ws?.cwd || "")}`;
+  }
+  const tabsContainer = document.getElementById("surface-tabs-container");
+  if (tabsContainer && ws) {
+    if (ws.surfaces && ws.surfaces.length > 1) {
+      tabsContainer.style.display = "";
+      const tabsHtml = renderSurfaceTabs(ws);
+      if (tabsContainer.innerHTML !== tabsHtml) {
+        tabsContainer.innerHTML = tabsHtml;
+        bindTabsEvents();
+      }
+    } else {
+      tabsContainer.style.display = "none";
+    }
+  }
+}
+
+function openModal(modalName, options = {}) {
+  hapticTick();
+  state.activeModal = modalName;
+  if (modalName === "spawn") {
+    const target = options.target || "surface";
+    const currentWs = state.dashboard?.workspaces?.find(
+      (w) => w.id === state.activeWorkspaceId
+    );
+    state.spawnForm.target = target;
+    state.spawnForm.cwd =
+      options.cwd ||
+      state.surfaceDetail?.surface?.cwd ||
+      currentWs?.cwd ||
+      state.dashboard?.recentDirectories?.[0]?.path ||
+      "/Users/felix/Projects";
+  }
+
+  const root = document.getElementById("modal-root");
+  if (root) {
+    root.innerHTML = renderModal();
+    bindModalEvents();
+  }
+}
+
+function closeModal() {
+  state.activeModal = null;
+  const root = document.getElementById("modal-root");
+  if (root) {
+    root.innerHTML = "";
+  }
+}
+
+function bindMissionEvents() {
+  // Filter segment items
+  document.querySelectorAll("[data-filter]").forEach((el) => {
+    el.addEventListener("click", () => {
+      hapticTick();
+      state.filter = el.getAttribute("data-filter");
+      if (state.filter === "vault" && state.vaultResults.length === 0) {
+        fetchVaultSessions(state.vaultQuery);
+      }
+      const container = document.getElementById("screen-container");
+      if (container) {
+        container.innerHTML = renderMissionControl();
+        bindMissionEvents();
+      }
     });
   });
 
-  // Quick inline actions on Mission Control cards with instant optimistic feedback
+  // Attention banner quick inline actions
   document.querySelectorAll("[data-quick-key]").forEach((el) => {
     el.addEventListener("click", async (e) => {
       e.stopPropagation();
@@ -1446,19 +1691,69 @@ function bindEvents() {
     });
   });
 
-  // Filter segment items
-  document.querySelectorAll("[data-filter]").forEach((el) => {
-    el.addEventListener("click", () => {
-      hapticTick();
-      state.filter = el.getAttribute("data-filter");
-      if (state.filter === "vault" && state.vaultResults.length === 0) {
-        fetchVaultSessions(state.vaultQuery);
-      }
-      render();
+  // Open workspace / surface
+  document.querySelectorAll("[data-open-surf]").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const wsId = el.getAttribute("data-open-ws");
+      const surfId = el.getAttribute("data-open-surf");
+      if (surfId) openSurface(wsId, surfId);
     });
   });
 
-  // Mode switcher tabs
+  // Action buttons on mission screen
+  document.querySelectorAll("[data-action]").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      const act = el.getAttribute("data-action");
+      if (act === "refresh-dash") {
+        hapticTick();
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "refresh" }));
+        }
+      } else if (act === "open-spawn") {
+        const target = el.getAttribute("data-target") || "workspace";
+        openModal("spawn", { target });
+      } else if (act === "run-vault-search") {
+        const inp = document.getElementById("vault-search-input");
+        state.vaultQuery = inp ? inp.value : "";
+        fetchVaultSessions(state.vaultQuery);
+      }
+    });
+  });
+
+  // Vault input search on Enter
+  const vInp = document.getElementById("vault-search-input");
+  if (vInp) {
+    vInp.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        state.vaultQuery = vInp.value;
+        fetchVaultSessions(state.vaultQuery);
+      }
+    });
+  }
+
+  // Vault item click
+  document.querySelectorAll("[data-vault-idx]").forEach((el) => {
+    el.addEventListener("click", () => {
+      const sid = el.getAttribute("data-vault-idx");
+      const found = state.vaultResults.find((x) => x.session_id === sid);
+      if (found) openVaultSessionModal(found);
+    });
+  });
+}
+
+function bindSurfaceEvents() {
+  const goHomeBtn = document.querySelector("[data-action='go-home']");
+  if (goHomeBtn) goHomeBtn.addEventListener("click", () => goHome());
+
+  const wsSwitcherBtn = document.querySelector("[data-action='open-ws-switcher']");
+  if (wsSwitcherBtn) wsSwitcherBtn.addEventListener("click", () => openModal("ws_switcher"));
+
+  const telemBtn = document.querySelector("[data-action='open-telemetry']");
+  if (telemBtn) telemBtn.addEventListener("click", () => openModal("telemetry"));
+
+  // Mode switcher tabs (Diff, Terminal, Agent)
   document.querySelectorAll("[data-mode]").forEach((el) => {
     el.addEventListener("click", () => {
       hapticTick();
@@ -1467,13 +1762,23 @@ function bindEvents() {
       if (state.activeSurfaceId) {
         state.viewModeBySurface[state.activeSurfaceId] = m;
       }
+      document.querySelectorAll("[data-mode]").forEach((b) => {
+        b.classList.toggle("active", b.getAttribute("data-mode") === m);
+      });
+      const vp = document.getElementById("surface-viewport");
+      if (vp) {
+        vp.className = m === "terminal" ? "terminal-view" : m === "diff" ? "diff-view" : "conversation-stream";
+        const ws = state.dashboard?.workspaces?.find((w) => w.id === state.activeWorkspaceId);
+        const surf = state.surfaceDetail?.surface || ws?.surfaces?.find((s) => s.id === state.activeSurfaceId);
+        vp.innerHTML = renderSurfaceViewportContent(state.surfaceDetail, surf, ws);
+        bindViewportEvents();
+      }
       if (m === "diff") {
         const cwd =
           state.surfaceDetail?.surface?.cwd ||
           state.dashboard?.workspaces?.find((w) => w.id === state.activeWorkspaceId)?.cwd;
         loadGitDiff(cwd);
       }
-      render();
     });
   });
 
@@ -1487,7 +1792,14 @@ function bindEvents() {
           hapticTick();
           state.peekModePrev = state.viewMode;
           state.viewMode = "terminal";
-          render();
+          const vp = document.getElementById("surface-viewport");
+          if (vp) {
+            vp.className = "terminal-view";
+            const ws = state.dashboard?.workspaces?.find((w) => w.id === state.activeWorkspaceId);
+            const surf = state.surfaceDetail?.surface || ws?.surfaces?.find((s) => s.id === state.activeSurfaceId);
+            vp.innerHTML = renderSurfaceViewportContent(state.surfaceDetail, surf, ws);
+            bindViewportEvents();
+          }
         }, 260);
       }
     });
@@ -1496,15 +1808,143 @@ function bindEvents() {
       if (state.peekModePrev) {
         state.viewMode = state.peekModePrev;
         state.peekModePrev = null;
-        render();
+        const vp = document.getElementById("surface-viewport");
+        if (vp) {
+          vp.className = state.viewMode === "terminal" ? "terminal-view" : state.viewMode === "diff" ? "diff-view" : "conversation-stream";
+          const ws = state.dashboard?.workspaces?.find((w) => w.id === state.activeWorkspaceId);
+          const surf = state.surfaceDetail?.surface || ws?.surfaces?.find((s) => s.id === state.activeSurfaceId);
+          vp.innerHTML = renderSurfaceViewportContent(state.surfaceDetail, surf, ws);
+          bindViewportEvents();
+        }
       }
     };
     cliBtn.addEventListener("pointerup", endHold);
     cliBtn.addEventListener("pointercancel", endHold);
   }
 
+  bindTabsEvents();
+  bindPromptEvents();
+  bindViewportEvents();
+  bindComposerEvents();
+}
+
+function bindTabsEvents() {
+  const tabsContainer = document.getElementById("surface-tabs-container");
+  if (!tabsContainer) return;
+
+  tabsContainer.querySelectorAll("[data-open-surf]").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const wsId = el.getAttribute("data-open-ws");
+      const surfId = el.getAttribute("data-open-surf");
+      if (surfId && surfId !== state.activeSurfaceId) {
+        openSurface(wsId, surfId);
+      }
+    });
+  });
+
+  tabsContainer.querySelectorAll("[data-action='open-spawn']").forEach((el) => {
+    el.addEventListener("click", () => {
+      openModal("spawn", { target: "surface" });
+    });
+  });
+}
+
+function bindPromptEvents() {
+  const dock = document.getElementById("tui-prompt-dock-container");
+  if (!dock) return;
+
+  dock.querySelectorAll("[data-answer-key]").forEach((el) => {
+    el.addEventListener("click", async () => {
+      const key = el.getAttribute("data-answer-key");
+      const workspaceId = el.getAttribute("data-ws");
+      const surfaceId = el.getAttribute("data-surf");
+      hapticTick("medium");
+
+      dock.querySelectorAll("button").forEach((b) => {
+        b.disabled = true;
+        b.style.opacity = "0.45";
+      });
+      el.style.opacity = "1";
+      el.innerHTML = "✓ " + el.innerHTML;
+
+      await apiPost({ action: "answer_prompt", workspaceId, surfaceId, key });
+      if (state.surfaceDetail?.detectedPrompt) {
+        state.surfaceDetail.detectedPrompt = null;
+        setTimeout(() => {
+          dock.innerHTML = "";
+        }, 220);
+      }
+    });
+  });
+}
+
+function bindViewportEvents() {
+  const vp = document.getElementById("surface-viewport");
+  if (!vp) return;
+
+  vp.onscroll = () => {
+    if (state.activeSurfaceId) {
+      state.scrollBySurface[state.activeSurfaceId] = vp.scrollTop;
+    }
+    const isUp = vp.scrollHeight - vp.scrollTop - vp.clientHeight > 200;
+    const btn = document.getElementById("jump-bottom-btn");
+    if (btn) btn.classList.toggle("visible", isUp);
+  };
+
+  vp.ontouchmove = () => {
+    const ta = document.getElementById("composer-textarea");
+    if (ta && document.activeElement === ta) {
+      ta.blur();
+    }
+  };
+
+  let touchStartX = 0;
+  let touchStartY = 0;
+  vp.ontouchstart = (e) => {
+    if (e.changedTouches?.length) {
+      touchStartX = e.changedTouches[0].clientX;
+      touchStartY = e.changedTouches[0].clientY;
+    }
+  };
+
+  vp.ontouchend = (e) => {
+    if (e.changedTouches?.length) {
+      const dx = e.changedTouches[0].clientX - touchStartX;
+      const dy = e.changedTouches[0].clientY - touchStartY;
+
+      // Edge swipe from left bezel (touchStartX < 40px) returns to Deck!
+      if (touchStartX < 40 && dx > 80 && Math.abs(dy) < 50) {
+        hapticTick();
+        goHome();
+        return;
+      }
+
+      // Horizontal swipe across surfaces in this workspace
+      if (Math.abs(dx) > 70 && Math.abs(dy) < 45) {
+        const currentWs = state.dashboard?.workspaces?.find(
+          (w) => w.id === state.activeWorkspaceId
+        );
+        if (currentWs && currentWs.surfaces.length > 1) {
+          const idx = currentWs.surfaces.findIndex(
+            (s) => s.id === state.activeSurfaceId
+          );
+          if (idx !== -1) {
+            if (dx < 0 && idx < currentWs.surfaces.length - 1) {
+              hapticTick();
+              openSurface(currentWs.id, currentWs.surfaces[idx + 1].id);
+            } else if (dx > 0 && idx > 0) {
+              hapticTick();
+              openSurface(currentWs.id, currentWs.surfaces[idx - 1].id);
+            }
+          }
+        }
+      }
+    }
+  };
+
   // Detected file preview chips
-  document.querySelectorAll("[data-preview-file]").forEach((el) => {
+  vp.querySelectorAll("[data-preview-file]").forEach((el) => {
     el.addEventListener("click", () => {
       const fp = el.getAttribute("data-preview-file");
       const cwd = el.getAttribute("data-cwd");
@@ -1512,244 +1952,61 @@ function bindEvents() {
     });
   });
 
-  // TUI Prompt Option Buttons
-  document.querySelectorAll("[data-answer-key]").forEach((el) => {
-    el.addEventListener("click", async () => {
-      const key = el.getAttribute("data-answer-key");
-      const workspaceId = el.getAttribute("data-ws");
-      const surfaceId = el.getAttribute("data-surf");
-      hapticTick("medium");
-
-      const dock = el.closest(".tui-prompt-dock");
-      if (dock) {
-        dock.querySelectorAll("button").forEach((b) => {
-          b.disabled = true;
-          b.style.opacity = "0.45";
-        });
-        el.style.opacity = "1";
-        el.innerHTML = "✓ " + el.innerHTML;
-      }
-
-      await apiPost({ action: "answer_prompt", workspaceId, surfaceId, key });
-      if (state.surfaceDetail?.detectedPrompt) {
-        state.surfaceDetail.detectedPrompt = null;
-        setTimeout(() => render(), 220);
-      }
+  // Terminal actions in viewport
+  vp.querySelectorAll("[data-action='toggle-wrap']").forEach((el) => {
+    el.addEventListener("click", () => {
+      state.terminalWrap = !state.terminalWrap;
+      const box = vp.querySelector(".terminal-box");
+      if (box) box.classList.toggle("nowrap", !state.terminalWrap);
+      el.textContent = state.terminalWrap ? "⇄ Reflow" : "→ Scroll";
     });
   });
 
-  // Viewport interactions: Jump to bottom, swipe across surfaces, dismiss keyboard
-  const vp = document.getElementById("surface-viewport");
-  if (vp) {
-    vp.addEventListener(
-      "scroll",
-      () => {
-        if (state.activeSurfaceId) {
-          state.scrollBySurface[state.activeSurfaceId] = vp.scrollTop;
-        }
-        const isUp = vp.scrollHeight - vp.scrollTop - vp.clientHeight > 200;
-        const btn = document.getElementById("jump-bottom-btn");
-        if (btn) btn.classList.toggle("visible", isUp);
-      },
-      { passive: true }
-    );
+  vp.querySelectorAll("[data-action='font-dec']").forEach((el) => {
+    el.addEventListener("click", () => {
+      state.terminalFontSize = Math.max(9.5, state.terminalFontSize - 1);
+      const box = vp.querySelector(".terminal-box");
+      if (box) box.style.fontSize = `${state.terminalFontSize}px`;
+    });
+  });
 
-    vp.addEventListener(
-      "touchmove",
-      () => {
-        const ta = document.getElementById("composer-textarea");
-        if (ta && document.activeElement === ta) {
-          ta.blur();
-        }
-      },
-      { passive: true }
-    );
+  vp.querySelectorAll("[data-action='font-inc']").forEach((el) => {
+    el.addEventListener("click", () => {
+      state.terminalFontSize = Math.min(18, state.terminalFontSize + 1);
+      const box = vp.querySelector(".terminal-box");
+      if (box) box.style.fontSize = `${state.terminalFontSize}px`;
+    });
+  });
+}
 
-    let touchStartX = 0;
-    let touchStartY = 0;
-    vp.addEventListener(
-      "touchstart",
-      (e) => {
-        if (e.changedTouches?.length) {
-          touchStartX = e.changedTouches[0].clientX;
-          touchStartY = e.changedTouches[0].clientY;
-        }
-      },
-      { passive: true }
-    );
+function bindComposerEvents() {
+  const dock = document.getElementById("composer-dock");
+  if (!dock) return;
 
-    vp.addEventListener(
-      "touchend",
-      (e) => {
-        if (e.changedTouches?.length) {
-          const dx = e.changedTouches[0].clientX - touchStartX;
-          const dy = e.changedTouches[0].clientY - touchStartY;
+  const shortcutsBtn = dock.querySelector("[data-action='open-shortcuts']");
+  if (shortcutsBtn) shortcutsBtn.addEventListener("click", () => openModal("shortcuts"));
 
-          // Edge swipe from left bezel (touchStartX < 40px) returns to Deck!
-          if (touchStartX < 40 && dx > 80 && Math.abs(dy) < 50) {
-            hapticTick();
-            goHome();
-            return;
-          }
-
-          // Horizontal swipe across surfaces in this workspace
-          if (Math.abs(dx) > 70 && Math.abs(dy) < 45) {
-            const currentWs = state.dashboard?.workspaces?.find(
-              (w) => w.id === state.activeWorkspaceId
-            );
-            if (currentWs && currentWs.surfaces.length > 1) {
-              const idx = currentWs.surfaces.findIndex(
-                (s) => s.id === state.activeSurfaceId
-              );
-              if (idx !== -1) {
-                if (dx < 0 && idx < currentWs.surfaces.length - 1) {
-                  hapticTick();
-                  openSurface(currentWs.id, currentWs.surfaces[idx + 1].id);
-                } else if (dx > 0 && idx > 0) {
-                  hapticTick();
-                  openSurface(currentWs.id, currentWs.surfaces[idx - 1].id);
-                }
-              }
-            }
-          }
-        }
-      },
-      { passive: true }
-    );
+  const toggleModeBtn = dock.querySelector("[data-action='toggle-composer-mode']");
+  if (toggleModeBtn) {
+    toggleModeBtn.addEventListener("click", () => {
+      hapticTick();
+      state.composerMode = state.composerMode === "ask" ? "shell" : "ask";
+      toggleModeBtn.textContent = state.composerMode === "shell" ? "$" : "✦";
+      const ta = document.getElementById("composer-textarea");
+      if (ta) {
+        ta.placeholder =
+          state.composerMode === "shell"
+            ? "Run shell command (! or raw)…"
+            : `Message ${AGENT_META[state.surfaceDetail?.surface?.agentKind]?.label || "surface"}…`;
+      }
+    });
   }
 
-  // Key Strip / Shortcut Buttons
-  document.querySelectorAll("[data-send-key]").forEach((el) => {
-    el.addEventListener("click", async () => {
-      const key = el.getAttribute("data-send-key");
-      hapticTick("medium");
-      await apiPost({
-        action: "send_key",
-        workspaceId: state.activeWorkspaceId,
-        surfaceId: state.activeSurfaceId,
-        key,
-      });
-      state.activeModal = null;
-      render();
-    });
-  });
+  const sendBtn = dock.querySelector("[data-action='submit-composer']");
+  if (sendBtn) {
+    sendBtn.addEventListener("click", () => submitComposer());
+  }
 
-  document.querySelectorAll("[data-insert-slash]").forEach((el) => {
-    el.addEventListener("click", () => {
-      hapticTick("light");
-      const cmd = el.getAttribute("data-insert-slash");
-      const ta = document.getElementById("composer-textarea");
-      state.activeModal = null;
-      render();
-      setTimeout(() => {
-        const nextTa = document.getElementById("composer-textarea");
-        if (nextTa) {
-          nextTa.value = cmd + " ";
-          state.composerText = nextTa.value;
-          if (state.activeSurfaceId) {
-            state.draftsBySurface[state.activeSurfaceId] = nextTa.value;
-          }
-          nextTa.focus();
-        }
-      }, 50);
-    });
-  });
-
-  // General data-action buttons
-  document.querySelectorAll("[data-action]").forEach((el) => {
-    el.addEventListener("click", async (e) => {
-      const act = el.getAttribute("data-action");
-      if (act === "go-home") {
-        goHome();
-      } else if (act === "refresh-dash") {
-        hapticTick();
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: "refresh" }));
-        }
-      } else if (act === "open-ws-switcher") {
-        hapticTick();
-        state.activeModal = "ws_switcher";
-        render();
-      } else if (act === "open-shortcuts") {
-        hapticTick();
-        state.activeModal = "shortcuts";
-        render();
-      } else if (act === "open-telemetry") {
-        hapticTick();
-        state.activeModal = "telemetry";
-        render();
-      } else if (act === "open-spawn") {
-        hapticTick();
-        const target = el.getAttribute("data-target") || "surface";
-        const currentWs = state.dashboard?.workspaces?.find(
-          (w) => w.id === state.activeWorkspaceId
-        );
-        state.spawnForm.target = target;
-        state.spawnForm.cwd =
-          state.surfaceDetail?.surface?.cwd ||
-          currentWs?.cwd ||
-          state.dashboard?.recentDirectories?.[0]?.path ||
-          "/Users/felix/Projects";
-        state.activeModal = "spawn";
-        render();
-      } else if (act === "close-modal") {
-        state.activeModal = null;
-        render();
-      } else if (act === "toggle-composer-mode") {
-        hapticTick();
-        state.composerMode = state.composerMode === "ask" ? "shell" : "ask";
-        render();
-      } else if (act === "toggle-wrap") {
-        state.terminalWrap = !state.terminalWrap;
-        render();
-      } else if (act === "font-dec") {
-        state.terminalFontSize = Math.max(9.5, state.terminalFontSize - 1);
-        render();
-      } else if (act === "font-inc") {
-        state.terminalFontSize = Math.min(18, state.terminalFontSize + 1);
-        render();
-      } else if (act === "submit-composer") {
-        await submitComposer();
-      } else if (act === "confirm-spawn") {
-        e.stopPropagation();
-        await submitSpawn();
-      } else if (act === "run-vault-search") {
-        const inp = document.getElementById("vault-search-input");
-        state.vaultQuery = inp ? inp.value : "";
-        await fetchVaultSessions(state.vaultQuery);
-      }
-    });
-  });
-
-  // Spawn modal preset & directory pickers
-  document.querySelectorAll("[data-spawn-preset]").forEach((el) => {
-    el.addEventListener("click", () => {
-      hapticTick();
-      state.spawnForm.preset = el.getAttribute("data-spawn-preset");
-      state.spawnForm.command = el.getAttribute("data-spawn-cmd") || "";
-      render();
-    });
-  });
-
-  document.querySelectorAll("[data-pick-dir]").forEach((el) => {
-    el.addEventListener("click", () => {
-      hapticTick();
-      state.spawnForm.cwd = el.getAttribute("data-pick-dir");
-      const cwdInp = document.getElementById("spawn-cwd");
-      if (cwdInp) cwdInp.value = state.spawnForm.cwd;
-    });
-  });
-
-  // Vault item click
-  document.querySelectorAll("[data-vault-idx]").forEach((el) => {
-    el.addEventListener("click", () => {
-      const sid = el.getAttribute("data-vault-idx");
-      const found = state.vaultResults.find((x) => x.session_id === sid);
-      if (found) openVaultSessionModal(found);
-    });
-  });
-
-  // Composer textarea Enter key & input sync
   const ta = document.getElementById("composer-textarea");
   if (ta) {
     ta.addEventListener("input", () => {
@@ -1769,6 +2026,103 @@ function bindEvents() {
   }
 }
 
+function bindModalEvents() {
+  const root = document.getElementById("modal-root");
+  if (!root) return;
+
+  root.querySelectorAll("[data-action='close-modal']").forEach((el) => {
+    el.addEventListener("click", () => closeModal());
+  });
+
+  root.querySelectorAll("[data-spawn-preset]").forEach((el) => {
+    el.addEventListener("click", () => {
+      hapticTick();
+      state.spawnForm.preset = el.getAttribute("data-spawn-preset");
+      state.spawnForm.command = el.getAttribute("data-spawn-cmd") || "";
+      root.innerHTML = renderModal();
+      bindModalEvents();
+    });
+  });
+
+  root.querySelectorAll("[data-pick-dir]").forEach((el) => {
+    el.addEventListener("click", () => {
+      hapticTick();
+      state.spawnForm.cwd = el.getAttribute("data-pick-dir");
+      const cwdInp = document.getElementById("spawn-cwd");
+      if (cwdInp) cwdInp.value = state.spawnForm.cwd;
+    });
+  });
+
+  root.querySelectorAll("[data-action='confirm-spawn']").forEach((el) => {
+    el.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      await submitSpawn();
+    });
+  });
+
+  root.querySelectorAll("[data-send-key]").forEach((el) => {
+    el.addEventListener("click", async () => {
+      const key = el.getAttribute("data-send-key");
+      hapticTick("medium");
+      await apiPost({
+        action: "send_key",
+        workspaceId: state.activeWorkspaceId,
+        surfaceId: state.activeSurfaceId,
+        key,
+      });
+      closeModal();
+    });
+  });
+
+  root.querySelectorAll("[data-insert-slash]").forEach((el) => {
+    el.addEventListener("click", () => {
+      hapticTick("light");
+      const cmd = el.getAttribute("data-insert-slash");
+      closeModal();
+      setTimeout(() => {
+        const nextTa = document.getElementById("composer-textarea");
+        if (nextTa) {
+          nextTa.value = cmd + " ";
+          state.composerText = nextTa.value;
+          if (state.activeSurfaceId) {
+            state.draftsBySurface[state.activeSurfaceId] = nextTa.value;
+          }
+          nextTa.focus();
+        }
+      }, 50);
+    });
+  });
+
+  root.querySelectorAll("[data-open-surf]").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const wsId = el.getAttribute("data-open-ws");
+      const surfId = el.getAttribute("data-open-surf");
+      closeModal();
+      if (surfId) openSurface(wsId, surfId);
+    });
+  });
+}
+
+// Global toggle capture listener to persist open details accordions across background updates
+document.addEventListener(
+  "toggle",
+  (e) => {
+    const el = e.target;
+    if (el && el.matches && el.matches("details[data-details-id]")) {
+      const id = el.getAttribute("data-details-id");
+      if (id) {
+        if (el.open) {
+          state.openDetails.add(id);
+        } else {
+          state.openDetails.delete(id);
+        }
+      }
+    }
+  },
+  true
+);
+
 async function submitComposer() {
   const ta = document.getElementById("composer-textarea");
   const raw = (ta ? ta.value : state.composerText).trim();
@@ -1785,8 +2139,20 @@ async function submitComposer() {
   if (state.activeSurfaceId) {
     delete state.draftsBySurface[state.activeSurfaceId];
   }
-  if (ta) ta.value = "";
-  render();
+  if (ta) {
+    ta.value = "";
+    ta.style.height = "auto";
+  }
+
+  // Optimistic feedback: append user turn immediately to stream
+  const vp = document.getElementById("surface-viewport");
+  if (vp && state.viewMode === "agent") {
+    const userDiv = document.createElement("div");
+    userDiv.className = "turn-user";
+    userDiv.textContent = raw;
+    vp.appendChild(userDiv);
+    vp.scrollTop = vp.scrollHeight;
+  }
 
   await apiPost({
     action: "send_prompt",
@@ -1807,8 +2173,7 @@ async function submitSpawn() {
   const initialPrompt = promptInp ? promptInp.value.trim() : state.spawnForm.initialPrompt;
   const command = state.spawnForm.command;
 
-  state.activeModal = null;
-  render();
+  closeModal();
 
   if (state.spawnForm.target === "workspace" || !state.activeWorkspaceId) {
     await apiPost({
