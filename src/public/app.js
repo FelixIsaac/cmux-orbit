@@ -61,8 +61,15 @@ function saveCachedDashboard(data) {
   }
 }
 
-function hapticTick() {
+function hapticTick(style = "light") {
   try {
+    if (window.webkit?.messageHandlers?.orbitNative) {
+      window.webkit.messageHandlers.orbitNative.postMessage({
+        type: "haptic",
+        style,
+      });
+      return;
+    }
     if (navigator.vibrate) navigator.vibrate(8);
   } catch {
     // ignore
