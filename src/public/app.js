@@ -1103,14 +1103,25 @@ async function openVaultSessionModal(session) {
   }
 }
 
-function scrollToViewportBottom() {
-  requestAnimationFrame(() => {
-    const vp = document.getElementById("surface-viewport");
-    if (vp) {
+function scrollToViewportBottom(smooth = false) {
+  const vp = document.getElementById("surface-viewport");
+  if (vp) {
+    if (smooth) {
+      vp.scrollTo({ top: vp.scrollHeight, behavior: "smooth" });
+    } else {
       vp.scrollTop = vp.scrollHeight;
     }
-  });
+    if (state.activeSurfaceId) {
+      state.scrollBySurface[state.activeSurfaceId] = vp.scrollHeight;
+    }
+  }
+  if (activeTerminalInstance && state.viewMode === "terminal") {
+    activeTerminalInstance.scrollToBottom();
+  }
+  const btn = document.getElementById("jump-bottom-btn");
+  if (btn) btn.classList.remove("visible");
 }
+window.scrollToViewportBottom = scrollToViewportBottom;
 
 // Render Functions
 function renderAgentBadge(agentKind) {
@@ -1461,7 +1472,7 @@ function renderSurfaceScreen() {
       </main>
 
       ${state.viewMode !== "terminal" ? `
-        <button id="jump-bottom-btn" class="jump-bottom-btn" onclick="scrollToViewportBottom()">
+        <button id="jump-bottom-btn" class="jump-bottom-btn" data-action="jump-bottom" onclick="scrollToViewportBottom(true)">
           ${isRunning ? `<span class="status-dot running" style="width:6px;height:6px;"></span> ` : ""}↓ Latest
         </button>
       ` : ""}
@@ -2730,6 +2741,16 @@ function bindViewportEvents() {
   const vp = document.getElementById("surface-viewport");
   if (!vp) return;
 
+  const jumpBtn = document.getElementById("jump-bottom-btn");
+  if (jumpBtn) {
+    jumpBtn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      hapticTick("light");
+      scrollToViewportBottom(true);
+    };
+  }
+
   vp.onscroll = () => {
     if (state.activeSurfaceId) {
       state.scrollBySurface[state.activeSurfaceId] = vp.scrollTop;
@@ -3280,6 +3301,17 @@ if (window.visualViewport) {
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").catch(() => {});
 }
+
+// Delegated click listener for Jump to Latest
+document.addEventListener("click", (e) => {
+  const jumpBtn = e.target.closest("#jump-bottom-btn") || e.target.closest("[data-action='jump-bottom']");
+  if (jumpBtn) {
+    e.preventDefault();
+    e.stopPropagation();
+    hapticTick("light");
+    scrollToViewportBottom(true);
+  }
+});
 
 initNavigationState();
 render();
