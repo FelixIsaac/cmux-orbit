@@ -69,6 +69,8 @@ export interface OrbitDashboardSnapshot {
   needsInputCount: number;
   runningCount: number;
   unreadCount: number;
+  needsInputWorkspaceCount?: number;
+  activeWorkspaceCount?: number;
   attentionItems: {
     workspaceId: string;
     workspaceTitle: string;
@@ -393,8 +395,12 @@ async function _buildDashboardSnapshotInternal(): Promise<OrbitDashboardSnapshot
     0
   );
   const unreadCount = workspaces.filter((w) => w.hasUnread || w.unreadCount > 0 || w.state === "unread").length;
+  const needsInputWorkspaceCount = workspaces.filter((w) => w.state === "needs_input").length;
+  const activeWorkspaceCount = workspaces.filter(
+    (w) => w.state === "running" || w.state === "unread" || w.hasUnread
+  ).length;
 
-  const stateHash = `${workspaces.length}:${totalSurfaces}:${needsInputCount}:${runningCount}:${unreadCount}:${attentionItems.map((a) => `${a.surfaceId}:${a.state}`).join(",")}`;
+  const stateHash = `${workspaces.length}:${totalSurfaces}:${needsInputCount}:${runningCount}:${unreadCount}:${needsInputWorkspaceCount}:${activeWorkspaceCount}:${attentionItems.map((a) => `${a.surfaceId}:${a.state}`).join(",")}`;
 
   const snapshot: OrbitDashboardSnapshot = {
     timestamp: new Date().toISOString(),
@@ -407,6 +413,8 @@ async function _buildDashboardSnapshotInternal(): Promise<OrbitDashboardSnapshot
     needsInputCount,
     runningCount,
     unreadCount,
+    needsInputWorkspaceCount,
+    activeWorkspaceCount,
     attentionItems,
     workspaces,
     recentDirectories: listRecentDirectories(workspaces.map((w) => w.cwd)),

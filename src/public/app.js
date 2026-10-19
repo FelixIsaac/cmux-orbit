@@ -1153,7 +1153,20 @@ function renderMissionControl() {
   }
 
   const attentionList = dash.attentionItems || [];
-  let workspaces = dash.workspaces || [];
+  const allWs = dash.workspaces || [];
+
+  const isInputWs = (w) => w.state === "needs_input";
+  const isActiveWs = (w) => w.state === "running" || w.state === "unread" || w.hasUnread;
+
+  const inputWsCount = dash.needsInputWorkspaceCount ?? allWs.filter(isInputWs).length;
+  const activeWsCount = dash.activeWorkspaceCount ?? allWs.filter(isActiveWs).length;
+
+  let workspaces = allWs;
+  if (state.filter === "needs_input") {
+    workspaces = allWs.filter(isInputWs);
+  } else if (state.filter === "active") {
+    workspaces = allWs.filter(isActiveWs);
+  }
 
   if (state.missionSearch) {
     const q = state.missionSearch.toLowerCase();
@@ -1165,15 +1178,7 @@ function renderMissionControl() {
     );
   }
 
-  if (state.filter === "needs_input") {
-    workspaces = workspaces.filter((w) => w.state === "needs_input");
-  } else if (state.filter === "active") {
-    workspaces = workspaces.filter(
-      (w) => w.state === "running" || w.state === "unread" || w.hasUnread
-    );
-  }
-
-  // Triage separation for high scale (e.g. 50 workspaces)
+  // Triage separation for high scale (e.g. 50 workspaces) under All filter
   const activeWorkspaces = workspaces.filter(
     (w) => w.state === "running" || w.state === "unread" || w.hasUnread || w.isPinned
   );
@@ -1199,13 +1204,13 @@ function renderMissionControl() {
 
       <nav class="segment-bar">
         <button class="segment-item ${state.filter === "all" ? "active" : ""}" data-filter="all">
-          All (${dash.totalWorkspaces})
+          All (${allWs.length})
         </button>
         <button class="segment-item ${state.filter === "needs_input" ? "active" : ""}" data-filter="needs_input">
-          Input${dash.needsInputCount > 0 ? ` (${dash.needsInputCount})` : ""}
+          Input${inputWsCount > 0 ? ` (${inputWsCount})` : ""}
         </button>
         <button class="segment-item ${state.filter === "active" ? "active" : ""}" data-filter="active">
-          Active (${dash.runningCount + dash.unreadCount})
+          Active${activeWsCount > 0 ? ` (${activeWsCount})` : ""}
         </button>
         <button class="segment-item ${state.filter === "vault" ? "active" : ""}" data-filter="vault">
           Vault
@@ -1312,6 +1317,18 @@ function renderMissionControl() {
               `
                 : ""
             }
+          `
+              : workspaces.length === 0
+              ? `
+            <div class="empty-feed" style="padding: 48px 20px; text-align: center;">
+              <div style="font-size: 28px; margin-bottom: 8px;">✨</div>
+              <div style="font-size: 15px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px;">
+                ${state.filter === "needs_input" ? "No Actions Required" : state.filter === "active" ? "No Active Workspaces" : "No Workspaces Found"}
+              </div>
+              <div style="font-size: 13px; color: var(--text-muted);">
+                ${state.filter === "needs_input" ? "All agents are either working or idle." : state.filter === "active" ? "No agents are currently running or unread." : "Try adjusting your search query."}
+              </div>
+            </div>
           `
               : workspaces.map((ws) => renderWorkspaceCard(ws)).join("")
           }
