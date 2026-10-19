@@ -1,0 +1,45 @@
+name: CmuxOrbit
+options:
+  bundleIdPrefix: com.felix.cmux
+  deploymentTarget:
+    macOS: "14.0"
+    iOS: "17.0"
+
+settings:
+  SWIFT_VERSION: "5.10"
+  MACOSX_DEPLOYMENT_TARGET: "14.0"
+  IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+
+targets:
+  CmuxCore:
+    type: library.static
+    platform: macOS
+    sources:
+      - path: Sources/CmuxCore
+
+  CmuxOrbitMac:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/CmuxOrbitMac
+    dependencies:
+      - target: CmuxCore
+    info:
+      path: Sources/CmuxOrbitMac/Info.plist
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.felix.cmux.orbit.mac
+      PRODUCT_NAME: "cmux Orbit"
+
+  CmuxOrbitIOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/CmuxOrbitIOS
+    dependencies:
+      - target: CmuxCore
+    info:
+      path: Sources/CmuxOrbitIOS/Info.plist
+    settings:
+      PRODUCT_BUNDLE_IDENTIFIER: com.felix.cmux.orbit.ios
+      TARGETED_DEVICE_FAMILY: "1,2"
+      PRODUCT_NAME: "cmux Orbit"

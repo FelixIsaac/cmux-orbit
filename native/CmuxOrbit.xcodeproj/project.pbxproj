@@ -1,0 +1,584 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		142408BA3A39DD06E1DFD521 /* QuickHUDView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 424A701254DA268A853A47E0 /* QuickHUDView.swift */; };
+		28295DCA42AFE0E986D8A2F7 /* InteractiveWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D56F9DC6F1DD01585981D53 /* InteractiveWidgets.swift */; };
+		2DA887D8391A0960BFE69D6E /* AgentLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7A530A325A63B6DBB67B52B /* AgentLiveActivity.swift */; };
+		390205E5E6D89C61370492B9 /* DockBadgeController.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA65F53BC66294D0A4DD3B4E /* DockBadgeController.swift */; };
+		4F45CF22AA3969FF30B4FDFD /* NotificationEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E190491197C40C51BA89AB9 /* NotificationEngine.swift */; };
+		579B24E90A79F70D7EFB6A5C /* CmuxUnixSocket.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91C3AFE0FEA0C89127646F18 /* CmuxUnixSocket.swift */; };
+		69AA2C2372DFAA35792F97A8 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E056F080350D38CDFB1E2B0 /* Models.swift */; };
+		6B9570FF26CED353781FDC6A /* CmuxOrbitIOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 224AF6002F587A47DB303265 /* CmuxOrbitIOSApp.swift */; };
+		856603BFD0594D594ECDD957 /* MenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C67C16EE5D6957AC7A9F55A7 /* MenuBarView.swift */; };
+		B12BAC6DA748A317BB0D8218 /* Haptics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BE076B9B30892D1AC2A30E2 /* Haptics.swift */; };
+		B2D1D065A6EDB95ACB717388 /* libCmuxCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 49B3D9A7323BF0CB23F7C0AA /* libCmuxCore.a */; };
+		B3DEA2A962480215CC834B81 /* IOSCompanionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D30B48733E4F9E62ADE280A0 /* IOSCompanionView.swift */; };
+		C4BE9BA5FF22843992F77931 /* OrbitApiClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5ABC571B12B0A774626B5E64 /* OrbitApiClient.swift */; };
+		CAB5832D76407D8D28C652CF /* libCmuxCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 49B3D9A7323BF0CB23F7C0AA /* libCmuxCore.a */; };
+		F3AF4809F03414387BC23F56 /* CmuxOrbitMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94C33286E4A13509AC245C3C /* CmuxOrbitMacApp.swift */; };
+		F52BE327C42FBCDC9D7B554D /* QuickHUDPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2E534134DABCBAE95DF3AFC /* QuickHUDPanel.swift */; };
+		F99AD3616E16FDFE63945E24 /* OrbitStateWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB662D5953E2E85D6D608067 /* OrbitStateWatcher.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		417CBCDB1D2E897B642FDC04 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 7E36F93E1099730C63740298 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4234B886FC3A3810B75D2D18;
+			remoteInfo = CmuxCore;
+		};
+		92B5FD7B5D97CABD7E187186 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 7E36F93E1099730C63740298 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4234B886FC3A3810B75D2D18;
+			remoteInfo = CmuxCore;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		224AF6002F587A47DB303265 /* CmuxOrbitIOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CmuxOrbitIOSApp.swift; sourceTree = "<group>"; };
+		2D56F9DC6F1DD01585981D53 /* InteractiveWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InteractiveWidgets.swift; sourceTree = "<group>"; };
+		424A701254DA268A853A47E0 /* QuickHUDView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickHUDView.swift; sourceTree = "<group>"; };
+		49B3D9A7323BF0CB23F7C0AA /* libCmuxCore.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libCmuxCore.a; sourceTree = BUILT_PRODUCTS_DIR; };
+		4E056F080350D38CDFB1E2B0 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		4E190491197C40C51BA89AB9 /* NotificationEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationEngine.swift; sourceTree = "<group>"; };
+		5ABC571B12B0A774626B5E64 /* OrbitApiClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrbitApiClient.swift; sourceTree = "<group>"; };
+		787016E6A0C57786EBC68F0B /* CmuxOrbitIOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = CmuxOrbitIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		7BE076B9B30892D1AC2A30E2 /* Haptics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Haptics.swift; sourceTree = "<group>"; };
+		91C3AFE0FEA0C89127646F18 /* CmuxUnixSocket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CmuxUnixSocket.swift; sourceTree = "<group>"; };
+		94C33286E4A13509AC245C3C /* CmuxOrbitMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CmuxOrbitMacApp.swift; sourceTree = "<group>"; };
+		A5557A086316A11A8E618AA6 /* CmuxOrbitMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = CmuxOrbitMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AB250B5C02A909B1947F11F4 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		BB662D5953E2E85D6D608067 /* OrbitStateWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrbitStateWatcher.swift; sourceTree = "<group>"; };
+		C67C16EE5D6957AC7A9F55A7 /* MenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarView.swift; sourceTree = "<group>"; };
+		D30B48733E4F9E62ADE280A0 /* IOSCompanionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSCompanionView.swift; sourceTree = "<group>"; };
+		E7A530A325A63B6DBB67B52B /* AgentLiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentLiveActivity.swift; sourceTree = "<group>"; };
+		EA65F53BC66294D0A4DD3B4E /* DockBadgeController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DockBadgeController.swift; sourceTree = "<group>"; };
+		F229F8A07B7613DA3DB38E50 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		F2E534134DABCBAE95DF3AFC /* QuickHUDPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuickHUDPanel.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		0D001BA5CA24251F6DD1B040 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B2D1D065A6EDB95ACB717388 /* libCmuxCore.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		81BAB26F9394DC1061A49634 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CAB5832D76407D8D28C652CF /* libCmuxCore.a in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		378126DAAAA3DE2141CBB504 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				787016E6A0C57786EBC68F0B /* CmuxOrbitIOS.app */,
+				A5557A086316A11A8E618AA6 /* CmuxOrbitMac.app */,
+				49B3D9A7323BF0CB23F7C0AA /* libCmuxCore.a */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		8DE5604AE5D9FDDC06EF1C09 /* CmuxOrbitIOS */ = {
+			isa = PBXGroup;
+			children = (
+				E7A530A325A63B6DBB67B52B /* AgentLiveActivity.swift */,
+				224AF6002F587A47DB303265 /* CmuxOrbitIOSApp.swift */,
+				7BE076B9B30892D1AC2A30E2 /* Haptics.swift */,
+				AB250B5C02A909B1947F11F4 /* Info.plist */,
+				2D56F9DC6F1DD01585981D53 /* InteractiveWidgets.swift */,
+				D30B48733E4F9E62ADE280A0 /* IOSCompanionView.swift */,
+			);
+			name = CmuxOrbitIOS;
+			path = Sources/CmuxOrbitIOS;
+			sourceTree = "<group>";
+		};
+		A82028F658854E96F542A447 /* CmuxOrbitMac */ = {
+			isa = PBXGroup;
+			children = (
+				94C33286E4A13509AC245C3C /* CmuxOrbitMacApp.swift */,
+				EA65F53BC66294D0A4DD3B4E /* DockBadgeController.swift */,
+				F229F8A07B7613DA3DB38E50 /* Info.plist */,
+				C67C16EE5D6957AC7A9F55A7 /* MenuBarView.swift */,
+				F2E534134DABCBAE95DF3AFC /* QuickHUDPanel.swift */,
+				424A701254DA268A853A47E0 /* QuickHUDView.swift */,
+			);
+			name = CmuxOrbitMac;
+			path = Sources/CmuxOrbitMac;
+			sourceTree = "<group>";
+		};
+		DC1F288DF961300C2B6BCE5C = {
+			isa = PBXGroup;
+			children = (
+				E4D7E7F97C81188E42ED02B8 /* CmuxCore */,
+				8DE5604AE5D9FDDC06EF1C09 /* CmuxOrbitIOS */,
+				A82028F658854E96F542A447 /* CmuxOrbitMac */,
+				378126DAAAA3DE2141CBB504 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		E4D7E7F97C81188E42ED02B8 /* CmuxCore */ = {
+			isa = PBXGroup;
+			children = (
+				91C3AFE0FEA0C89127646F18 /* CmuxUnixSocket.swift */,
+				4E056F080350D38CDFB1E2B0 /* Models.swift */,
+				4E190491197C40C51BA89AB9 /* NotificationEngine.swift */,
+				5ABC571B12B0A774626B5E64 /* OrbitApiClient.swift */,
+				BB662D5953E2E85D6D608067 /* OrbitStateWatcher.swift */,
+			);
+			name = CmuxCore;
+			path = Sources/CmuxCore;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		4234B886FC3A3810B75D2D18 /* CmuxCore */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CE83AF68975274C28482F8E3 /* Build configuration list for PBXNativeTarget "CmuxCore" */;
+			buildPhases = (
+				50FD0E4E10BFE91999E224DA /* Sources */,
+				F434C907063F2219B3A0CCBD /* Copy Swift Objective-C Interface Header */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = CmuxCore;
+			packageProductDependencies = (
+			);
+			productName = CmuxCore;
+			productReference = 49B3D9A7323BF0CB23F7C0AA /* libCmuxCore.a */;
+			productType = "com.apple.product-type.library.static";
+		};
+		EFD6625E3C0B9772086B2F55 /* CmuxOrbitMac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E06B33189D5B9A8B07832E5C /* Build configuration list for PBXNativeTarget "CmuxOrbitMac" */;
+			buildPhases = (
+				05280DA9F62FC53F2EE4376E /* Sources */,
+				0D001BA5CA24251F6DD1B040 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				6541C5ED044183C27CBDB673 /* PBXTargetDependency */,
+			);
+			name = CmuxOrbitMac;
+			packageProductDependencies = (
+			);
+			productName = CmuxOrbitMac;
+			productReference = A5557A086316A11A8E618AA6 /* CmuxOrbitMac.app */;
+			productType = "com.apple.product-type.application";
+		};
+		FAC8A2BA9A2B7BB44304FAF0 /* CmuxOrbitIOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = EA33E5CC9BCBA23359A8DB5D /* Build configuration list for PBXNativeTarget "CmuxOrbitIOS" */;
+			buildPhases = (
+				EBA22663E9AF9943A87F84B9 /* Sources */,
+				81BAB26F9394DC1061A49634 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				FC940DA31581FE790F4F0581 /* PBXTargetDependency */,
+			);
+			name = CmuxOrbitIOS;
+			packageProductDependencies = (
+			);
+			productName = CmuxOrbitIOS;
+			productReference = 787016E6A0C57786EBC68F0B /* CmuxOrbitIOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		7E36F93E1099730C63740298 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+				};
+			};
+			buildConfigurationList = C4572950C8894CE1D6383803 /* Build configuration list for PBXProject "CmuxOrbit" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = DC1F288DF961300C2B6BCE5C;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 378126DAAAA3DE2141CBB504 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				4234B886FC3A3810B75D2D18 /* CmuxCore */,
+				EFD6625E3C0B9772086B2F55 /* CmuxOrbitMac */,
+				FAC8A2BA9A2B7BB44304FAF0 /* CmuxOrbitIOS */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		F434C907063F2219B3A0CCBD /* Copy Swift Objective-C Interface Header */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(DERIVED_SOURCES_DIR)/$(SWIFT_OBJC_INTERFACE_HEADER_NAME)",
+			);
+			name = "Copy Swift Objective-C Interface Header";
+			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/include/$(PRODUCT_MODULE_NAME)/$(SWIFT_OBJC_INTERFACE_HEADER_NAME)",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "ditto \"${SCRIPT_INPUT_FILE_0}\" \"${SCRIPT_OUTPUT_FILE_0}\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		05280DA9F62FC53F2EE4376E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F3AF4809F03414387BC23F56 /* CmuxOrbitMacApp.swift in Sources */,
+				390205E5E6D89C61370492B9 /* DockBadgeController.swift in Sources */,
+				856603BFD0594D594ECDD957 /* MenuBarView.swift in Sources */,
+				F52BE327C42FBCDC9D7B554D /* QuickHUDPanel.swift in Sources */,
+				142408BA3A39DD06E1DFD521 /* QuickHUDView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		50FD0E4E10BFE91999E224DA /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				579B24E90A79F70D7EFB6A5C /* CmuxUnixSocket.swift in Sources */,
+				69AA2C2372DFAA35792F97A8 /* Models.swift in Sources */,
+				4F45CF22AA3969FF30B4FDFD /* NotificationEngine.swift in Sources */,
+				C4BE9BA5FF22843992F77931 /* OrbitApiClient.swift in Sources */,
+				F99AD3616E16FDFE63945E24 /* OrbitStateWatcher.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EBA22663E9AF9943A87F84B9 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2DA887D8391A0960BFE69D6E /* AgentLiveActivity.swift in Sources */,
+				6B9570FF26CED353781FDC6A /* CmuxOrbitIOSApp.swift in Sources */,
+				B12BAC6DA748A317BB0D8218 /* Haptics.swift in Sources */,
+				B3DEA2A962480215CC834B81 /* IOSCompanionView.swift in Sources */,
+				28295DCA42AFE0E986D8A2F7 /* InteractiveWidgets.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		6541C5ED044183C27CBDB673 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 4234B886FC3A3810B75D2D18 /* CmuxCore */;
+			targetProxy = 417CBCDB1D2E897B642FDC04 /* PBXContainerItemProxy */;
+		};
+		FC940DA31581FE790F4F0581 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 4234B886FC3A3810B75D2D18 /* CmuxCore */;
+			targetProxy = 92B5FD7B5D97CABD7E187186 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		243338A42F5344CC75603FF3 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.10;
+			};
+			name = Release;
+		};
+		2914C0B9ECE3FB7AC4A6D429 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = Sources/CmuxOrbitIOS/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-ObjC",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.felix.cmux.orbit.ios;
+				PRODUCT_NAME = "cmux Orbit";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		45DE12D87D4C5922CF6A23D0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.10;
+			};
+			name = Debug;
+		};
+		4726B94C85DD86D6E37A5FE4 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				COMBINE_HIDPI_IMAGES = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.felix.cmux.CmuxCore;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+			};
+			name = Release;
+		};
+		5CCB405133B5E802F343F818 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = Sources/CmuxOrbitMac/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-ObjC",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.felix.cmux.orbit.mac;
+				PRODUCT_NAME = "cmux Orbit";
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		8ED4873A3F429EB028F82546 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = Sources/CmuxOrbitMac/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-ObjC",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.felix.cmux.orbit.mac;
+				PRODUCT_NAME = "cmux Orbit";
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		99FF1A1C34DB13196C127AE4 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = Sources/CmuxOrbitIOS/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-ObjC",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.felix.cmux.orbit.ios;
+				PRODUCT_NAME = "cmux Orbit";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		D538A026C88804E9329BAF85 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				COMBINE_HIDPI_IMAGES = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.felix.cmux.CmuxCore;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		C4572950C8894CE1D6383803 /* Build configuration list for PBXProject "CmuxOrbit" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				45DE12D87D4C5922CF6A23D0 /* Debug */,
+				243338A42F5344CC75603FF3 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		CE83AF68975274C28482F8E3 /* Build configuration list for PBXNativeTarget "CmuxCore" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D538A026C88804E9329BAF85 /* Debug */,
+				4726B94C85DD86D6E37A5FE4 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		E06B33189D5B9A8B07832E5C /* Build configuration list for PBXNativeTarget "CmuxOrbitMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				8ED4873A3F429EB028F82546 /* Debug */,
+				5CCB405133B5E802F343F818 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		EA33E5CC9BCBA23359A8DB5D /* Build configuration list for PBXNativeTarget "CmuxOrbitIOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2914C0B9ECE3FB7AC4A6D429 /* Debug */,
+				99FF1A1C34DB13196C127AE4 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 7E36F93E1099730C63740298 /* Project object */;
+}

@@ -111,6 +111,37 @@ bun test
 
 ---
 
+## Native Swift Companion (macOS & iOS)
+
+In addition to the zero-expiry PWA, `cmux-orbit` includes a pure Swift native companion package in `native/` with **zero third-party dependencies**, leveraging Apple frameworks (`SwiftUI`, `AppKit`, `Network.framework`, `UserNotifications`, `ActivityKit`, and `WidgetKit`).
+
+### macOS Features (`CmuxOrbitMac`)
+- **Native Menu Bar Extra (`MenuBarExtra`)**: Resides in your menu bar with a live indicator showing running agents, unread turns, and attention counters.
+- **Spotlight-Style Floating HUD Overlay (`⌘⇧O` / `Cmd+Shift+O`)**: High-performance translucent glass HUD panel centered over full-screen IDEs and terminals. Search workspaces, jump to agents, approve interactive tool calls (`[1] Approve`, `[2] Always`, `[Esc] Deny`), and dispatch prompts instantly without switching focus.
+- **Interactive Action Notifications (`UNNotificationCategory`)**: System banners for permission requests with inline action buttons (`Approve (1)`, `Always Allow (2)`, `Deny (Esc)`, and `Reply with Prompt...`).
+- **Dynamic Dock Badge (`NSApp.dockTile.badgeLabel`)**: Displays real-time badge count for turns requiring human attention.
+- **Direct Unix Domain Socket IPC (`NWConnection`)**: Directly connects to `~/.local/state/cmux/cmux.sock` via Unix domain socket for sub-millisecond JSON-RPC dispatch without HTTP overhead.
+
+### iOS Features (`CmuxOrbitIOS`)
+- **Dynamic Island & Lock Screen Live Activities (`ActivityKit`)**: Real-time tracking of active agent turns, running tool executions, elapsed time, and token cost right on the Lock Screen and Dynamic Island.
+- **Lock Screen & Home Screen Widgets (`WidgetKit`)**: Circular gauge for pending approvals, inline status indicator, and medium dashboard widget with live triage status.
+- **Tactile Apple Haptics (`Haptics`)**: High-precision physical feedback on approvals, mode transitions, and completions.
+
+### Building & Running Native Apps
+
+```bash
+cd native
+
+# Build and run the macOS Menu Bar & HUD app
+swift run cmux-orbit-mac
+
+# Or open and build the Xcode project for macOS or iOS Simulator / Device:
+xcodegen generate
+open CmuxOrbit.xcodeproj
+```
+
+---
+
 ## Security & Privacy
 - **100% Local & Tailnet-Scoped:** `cmux-orbit` enforces peer IP validation (`isTrustedPeerAddress`), accepting connections strictly from loopback (`127.0.0.1`), your Tailscale WireGuard mesh (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`), or local LAN.
 - **Zero Telemetry / Zero Cloud Relay:** All conversation transcripts, diffs, and terminal streams travel directly between your Mac and your phone over Tailscale.
