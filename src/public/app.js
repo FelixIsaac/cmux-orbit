@@ -774,9 +774,14 @@ function connectWebSocket() {
         state.cmuxConnected = Boolean(msg.connected);
         updateCmuxStatusIndicator(state.cmuxConnected);
         if (state.cmuxConnected && wasCmuxConnected === false) {
-          fetchDashboard();
-          if (state.screen === "surface" && state.activeSurfaceId) {
-            fetchSurfaceDetail(state.activeWorkspaceId, state.activeSurfaceId);
+          if (ws && ws.readyState === WebSocket.OPEN && state.screen === "surface" && state.activeSurfaceId) {
+            ws.send(
+              JSON.stringify({
+                type: "watch",
+                workspaceId: state.activeWorkspaceId,
+                surfaceId: state.activeSurfaceId,
+              })
+            );
           }
         }
       } else if (msg.type === "dashboard" && msg.data) {
