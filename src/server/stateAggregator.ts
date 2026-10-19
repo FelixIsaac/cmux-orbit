@@ -1,5 +1,5 @@
-import { existsSync } from "fs";
-import { join } from "path";
+import { existsSync, readFileSync } from "fs";
+import { basename, join } from "path";
 import { cmuxRpc, isCmuxConnected, resolveCmuxSocketPath } from "./cmuxSocket";
 import {
   analyzeScreenText,
@@ -122,6 +122,79 @@ export interface VaultSessionEntry {
   resume_command?: string;
 }
 
+export function cleanSessionTitle(
+  rawTitle: string,
+  agent = "",
+  cwd = "",
+  filePath = ""
+): string {
+  let text = (rawTitle || "").trim();
+
+  // If Grok session file, extract actual user prompt from chat_history.jsonl
+  if (
+    agent.toLowerCase() === "grok" &&
+    (!text || text.includes("<rules>") || text.startsWith("<")) &&
+    filePath &&
+    existsSync(filePath)
+  ) {
+    try {
+      const content = readFileSync(filePath, "utf8");
+      const lines = content.trim().split("\n");
+      for (let i = 1; i < Math.min(lines.length, 15); i++) {
+        try {
+          const obj = JSON.parse(lines[i]);
+          if (obj.type === "user" && Array.isArray(obj.content)) {
+            for (const item of obj.content) {
+              if (item && typeof item.text === "string" && item.text.includes("<user_query>")) {
+                const q = item.text
+                  .replace(/^[\s\S]*?<user_query>\s*/, "")
+                  .replace(/<\/user_query>[\s\S]*$/, "")
+                  .trim();
+                if (q) {
+                  text = q;
+                  break;
+                }
+              }
+            }
+          }
+        } catch {}
+        if (text && !text.startsWith("<rules>")) break;
+      }
+    } catch {}
+  }
+
+  // Strip XML and system prompt wrappers
+  text = text
+    .replace(/<rules>[\s\S]*?<\/rules>/gi, "")
+    .replace(/<user_rules[\s\S]*?<\/user_rules>/gi, "")
+    .replace(/<user_rule>[\s\S]*?<\/user_rule>/gi, "")
+    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, "")
+    .replace(/<system>[\s\S]*?<\/system>/gi, "")
+    .replace(/<user_info>[\s\S]*?<\/user_info>/gi, "")
+    .replace(/<CONTEXT_SUMMARY>[\s\S]*?<\/CONTEXT_SUMMARY>/gi, "")
+    .replace(/<user_query>\s*/gi, "")
+    .replace(/<\/user_query>/gi, "")
+    .replace(/<USER_REQUEST>\s*/gi, "")
+    .replace(/<\/USER_REQUEST>/gi, "")
+    .replace(/<[^>]+>/g, " ");
+
+  // Collapse whitespace
+  text = text.replace(/\s+/g, " ").trim();
+
+  // Fallback if empty, too short, or default placeholder
+  if (!text || text.length < 2 || text === "Untitled chat") {
+    const dir = cwd ? basename(cwd) : "workspace";
+    return agent ? `${agent.toUpperCase()} session in ${dir}` : "Untitled session";
+  }
+
+  // Truncate excessively long titles
+  if (text.length > 160) {
+    text = text.slice(0, 157) + "…";
+  }
+
+  return text;
+}
+
 let cachedVaultSessions: VaultSessionEntry[] = [];
 let lastVaultFetchMs = 0;
 let vaultRefreshInFlight: Promise<VaultSessionEntry[]> | null = null;
@@ -133,6 +206,7 @@ export async function getVaultSessions(waitIfEmpty = false): Promise<VaultSessio
       .then((res) => {
         if (res?.sessions) {
           cachedVaultSessions = res.sessions.map((s) => {
+            let file = s.file;
             if (s.agent === "antigravity" && s.file?.endsWith("history.jsonl") && s.session_id) {
               const brainLog = join(
                 process.env.HOME || "",
@@ -141,10 +215,11 @@ export async function getVaultSessions(waitIfEmpty = false): Promise<VaultSessio
                 ".system_generated/logs/transcript.jsonl"
               );
               if (existsSync(brainLog)) {
-                return { ...s, file: brainLog };
+                file = brainLog;
               }
             }
-            return s;
+            const cleanTitle = cleanSessionTitle(s.title, s.agent, s.cwd, file);
+            return { ...s, file, title: cleanTitle };
           });
           lastVaultFetchMs = Date.now();
         }

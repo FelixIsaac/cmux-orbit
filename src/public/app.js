@@ -59,6 +59,9 @@ const state = {
   vaultResults: [],
   vaultSelectedSession: null,
   vaultMessages: [],
+  composerAttachments: [], // Array<{ id, filePath, filename, mimeType, size, previewUrl, isImage, uploading?: boolean }>
+  activeLightboxSrc: null,
+  activeLightboxCaption: null,
 };
 
 function loadCachedDashboard() {
@@ -697,6 +700,18 @@ function ensureMarkedConfigured() {
       },
       checkbox({ checked }) {
         return `<span class="task-check ${checked ? "" : "unchecked"}">${checked ? "✓" : ""}</span> `;
+      },
+      image({ href, title, text }) {
+        const cleanHref = (href || "").trim();
+        let imgSrc = cleanHref;
+        if (cleanHref.startsWith("file://")) {
+          imgSrc = `/api/media?path=${encodeURIComponent(cleanHref.replace(/^file:\/\//, ""))}`;
+        } else if (cleanHref.startsWith("/") || cleanHref.startsWith("~/")) {
+          imgSrc = `/api/media?path=${encodeURIComponent(cleanHref)}`;
+        }
+        const cleanTitle = title ? ` title="${escapeHtml(title)}"` : "";
+        const altText = escapeHtml(text || "Image");
+        return `<div class="stream-image-wrapper" data-action="open-lightbox" data-src="${escapeHtml(imgSrc)}" data-caption="${altText}"><img src="${escapeHtml(imgSrc)}" alt="${altText}"${cleanTitle} loading="lazy" class="stream-inline-img" /><span class="stream-image-tap-hint">Tap to zoom</span></div>`;
       }
     }
   });
@@ -705,16 +720,22 @@ function ensureMarkedConfigured() {
 
 function renderMarkdown(md) {
   if (!md) return "";
+  // Auto-convert bare image paths on their own line into markdown images ![filename](path)
+  const preprocessed = md.replace(/^((?:\/[\w\-./]+|\~[\w\-./]+|file:\/\/[^\s'"<>]+)\.(?:png|jpg|jpeg|gif|webp|svg|bmp|ico))$/gim, (match) => {
+    const filename = match.split("/").pop() || "image";
+    return `![${filename}](${match})`;
+  });
+
   if (typeof marked !== "undefined") {
     ensureMarkedConfigured();
     try {
-      return marked.parse(md);
+      return marked.parse(preprocessed);
     } catch {
       // Fall back on parse error
     }
   }
   // Graceful fallback if marked is not available
-  return `<p>${escapeHtml(md).replace(/\n/g, "<br/>")}</p>`;
+  return `<p>${escapeHtml(preprocessed).replace(/\n/g, "<br/>")}</p>`;
 }
 
 function shortenPath(p) {
@@ -1369,7 +1390,7 @@ function renderVaultView() {
           (s) => `
         <div class="workspace-card" data-vault-idx="${escapeHtml(s.session_id)}">
           <div class="card-top">
-            <span style="font-weight:600;font-size:14px;">${escapeHtml(s.title || s.session_id)}</span>
+            <span class="vault-card-title">${escapeHtml(s.title || s.session_id)}</span>
             <span class="tab-badge">${escapeHtml(s.agent)}</span>
           </div>
           <div class="card-cwd">${escapeHtml(shortenPath(s.cwd))} · ${(s.modified || "").slice(0, 16).replace("T", " ")}</div>
@@ -1496,7 +1517,25 @@ function renderSurfaceScreen() {
       </footer>
 
       <footer class="composer-dock" id="composer-dock" style="${state.viewMode === "terminal" ? "display:none;" : "display:block;"}">
+        <div id="composer-attachments-shelf" class="composer-attachments-shelf ${state.composerAttachments.length > 0 ? "visible" : ""}">
+          ${state.composerAttachments
+            .map(
+              (att) => `
+            <div class="attachment-pill" data-att-id="${escapeHtml(att.id)}">
+              ${
+                att.isImage || (att.mimeType && att.mimeType.startsWith("image/"))
+                  ? `<img src="${escapeHtml(att.previewUrl)}" class="attachment-thumb" data-action="open-lightbox" data-src="${escapeHtml(att.previewUrl)}" data-caption="${escapeHtml(att.filename)}" alt="thumb" />`
+                  : `<span class="attachment-doc-icon">📄</span>`
+              }
+              <span class="attachment-name" title="${escapeHtml(att.filename)}">${escapeHtml(att.filename)}${att.uploading ? " (uploading…)" : ""}</span>
+              <button class="attachment-remove-btn" data-action="remove-attachment" data-id="${escapeHtml(att.id)}" title="Remove">✕</button>
+            </div>
+          `
+            )
+            .join("")}
+        </div>
         <div class="composer-shell">
+          <button class="composer-tool-btn" data-action="pick-attachment" title="Attach image or file">📎</button>
           <button class="composer-tool-btn" data-action="open-shortcuts" title="Signals & Shortcuts">···</button>
           <button class="composer-tool-btn" data-action="toggle-composer-mode" title="Toggle Ask vs Shell" style="font-size:13px;font-family:var(--font-mono);font-weight:700;">
             ${state.composerMode === "shell" ? "$" : "✦"}
@@ -1516,6 +1555,7 @@ function renderSurfaceScreen() {
           >${escapeHtml(state.composerText)}</textarea>
           <button class="composer-send-btn" data-action="submit-composer">↑</button>
         </div>
+        <input type="file" id="composer-file-input" accept="image/*,.pdf,.txt,.md,.json,.csv,.log" multiple style="display:none;" />
       </footer>
     </div>
   `;
@@ -1584,6 +1624,60 @@ function renderGroupedToolCalls(toolCalls, turnKey = "t0") {
           .join("")}
       </div>
     </details>
+  `;
+}
+
+function extractMediaPaths(text) {
+  if (!text) return { cleanText: "", images: [] };
+  const images = [];
+  const imageRegex = /(?:!\[([^\]]*)\]\(([^)]+)\)|(?:(?:\/[\w\-./]+|\~[\w\-./]+|file:\/\/[^\s'"<>]+)\.(?:png|jpg|jpeg|gif|webp|svg|bmp|ico)))/gi;
+
+  const clean = text.replace(imageRegex, (match, mdAlt, mdUrl) => {
+    let p = (mdUrl || match).trim();
+    if (p.startsWith("file://")) {
+      p = p.replace(/^file:\/\//, "");
+    }
+    const filename = p.split("/").pop() || "image.png";
+    const mediaUrl = `/api/media?path=${encodeURIComponent(p)}`;
+    images.push({
+      path: p,
+      filename: mdAlt || filename,
+      previewUrl: mediaUrl,
+    });
+    return "";
+  }).trim();
+
+  return { cleanText: clean, images };
+}
+
+function renderUserTurn(m) {
+  const { cleanText, images } = extractMediaPaths(m.text);
+  const slideClass = m.isOptimistic ? "turn-slide-in" : "";
+  return `
+    <div class="turn-user ${slideClass}">
+      ${cleanText ? `<div>${escapeHtml(cleanText)}</div>` : ""}
+      ${
+        images.length > 0
+          ? `
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:${cleanText ? "8px" : "0"};">
+          ${images
+            .map(
+              (img) => `
+            <div class="stream-image-card" data-action="open-lightbox" data-src="${escapeHtml(img.previewUrl)}" data-caption="${escapeHtml(img.filename)}">
+              <img src="${escapeHtml(img.previewUrl)}" alt="${escapeHtml(img.filename)}" loading="lazy" />
+              <div class="stream-image-info">
+                <span class="stream-image-filename">${escapeHtml(img.filename)}</span>
+                <span class="stream-image-badge">Image</span>
+              </div>
+            </div>
+          `
+            )
+            .join("")}
+        </div>
+      `
+          : ""
+      }
+    </div>
   `;
 }
 
@@ -1738,7 +1832,7 @@ function renderSurfaceViewportContent(detail, surf, ws) {
         : messages
             .map((m, mIdx) => {
               if (m.role === "user") {
-                return `<div class="turn-user ${m.isOptimistic ? "turn-slide-in" : ""}">${escapeHtml(m.text)}</div>`;
+                return renderUserTurn(m);
               }
               const turnKey = m.timestamp ? m.timestamp.replace(/[^a-zA-Z0-9_-]/g, "_") : `turn-${mIdx}`;
               const reasoningKey = `reasoning-${turnKey}`;
@@ -2159,7 +2253,7 @@ function renderModal() {
       <div class="sheet-backdrop" data-action="close-modal">
         <div class="sheet-panel" onclick="event.stopPropagation()">
           <div class="sheet-header">
-            <span>${escapeHtml(s.title || s.session_id)}</span>
+            <span class="vault-card-title">${escapeHtml(s.title || s.session_id)}</span>
             <button class="btn-icon" data-action="close-modal">✕</button>
           </div>
           <div class="card-cwd">${escapeHtml(shortenPath(s.cwd))} · ${escapeHtml(s.agent)}</div>
@@ -2170,7 +2264,7 @@ function renderModal() {
                 : state.vaultMessages
                     .map((m) =>
                       m.role === "user"
-                        ? `<div class="turn-user">${escapeHtml(m.text)}</div>`
+                        ? renderUserTurn(m)
                         : `<div class="turn-assistant"><div class="prose">${renderMarkdown(m.text)}</div></div>`
                     )
                     .join("")
@@ -2179,9 +2273,34 @@ function renderModal() {
         </div>
       </div>
     `;
+  if (state.activeModal === "lightbox" && state.activeLightboxSrc) {
+    const src = state.activeLightboxSrc;
+    return `
+      <div class="lightbox-backdrop" data-action="close-modal">
+        <div class="lightbox-container" onclick="event.stopPropagation()">
+          <div class="lightbox-header">
+            <span class="lightbox-caption">${escapeHtml(state.activeLightboxCaption || "Image Preview")}</span>
+            <div style="display:flex;gap:8px;">
+              <a href="${escapeHtml(src)}" target="_blank" download class="btn-icon" title="Open full resolution">↗</a>
+              <button class="btn-icon" data-action="close-modal">✕</button>
+            </div>
+          </div>
+          <div class="lightbox-image-wrap">
+            <img src="${escapeHtml(src)}" class="lightbox-img" alt="Lightbox Preview" />
+          </div>
+        </div>
+      </div>
+    `;
   }
 
   return "";
+}
+
+function openLightboxModal(src, caption = "") {
+  hapticTick();
+  state.activeLightboxSrc = src;
+  state.activeLightboxCaption = caption || "Image Preview";
+  openModal("lightbox");
 }
 
 function render() {
@@ -2856,12 +2975,131 @@ function bindViewportEvents() {
   });
 }
 
+async function uploadAndAttachFile(file, targetInput = null) {
+  if (!file) return;
+  hapticTick();
+  const tempId = "att-" + Date.now() + "-" + Math.random().toString(36).slice(2, 6);
+  const isImg = file.type.startsWith("image/");
+  const blobUrl = isImg ? URL.createObjectURL(file) : "";
+
+  const attEntry = {
+    id: tempId,
+    filePath: "",
+    filename: file.name || (isImg ? "pasted-image.png" : "file"),
+    mimeType: file.type || "application/octet-stream",
+    size: file.size,
+    previewUrl: blobUrl,
+    isImage: isImg,
+    uploading: true,
+  };
+
+  if (!targetInput) {
+    state.composerAttachments.push(attEntry);
+    renderAttachmentsShelf();
+  }
+
+  showToast(`Uploading ${attEntry.filename}…`, 1500);
+
+  try {
+    const fd = new FormData();
+    fd.append("file", file, attEntry.filename);
+
+    const res = await fetch("/api/upload", {
+      method: "POST",
+      headers: {
+        "x-orbit-request": "1",
+      },
+      body: fd,
+    });
+
+    const data = await res.json();
+    if (data.ok) {
+      attEntry.uploading = false;
+      attEntry.filePath = data.filePath;
+      attEntry.previewUrl = data.previewUrl;
+      attEntry.filename = data.filename;
+      attEntry.mimeType = data.mimeType;
+
+      if (targetInput) {
+        const currentVal = targetInput.value || "";
+        targetInput.value = currentVal ? `${currentVal}\n${data.filePath}` : data.filePath;
+        targetInput.focus();
+        showToast(`Attached ${data.filename}`, 2000);
+      } else {
+        renderAttachmentsShelf();
+        showToast(`Attached ${data.filename}`, 2000);
+      }
+    } else {
+      showToast(`Upload failed: ${data.error || "Server error"}`, 3000);
+      removeAttachment(tempId);
+    }
+  } catch (err) {
+    showToast(`Upload error: ${err?.message || "Network error"}`, 3000);
+    removeAttachment(tempId);
+  }
+}
+
+function removeAttachment(id) {
+  state.composerAttachments = state.composerAttachments.filter((a) => a.id !== id);
+  renderAttachmentsShelf();
+}
+
+function renderAttachmentsShelf() {
+  const shelf = document.getElementById("composer-attachments-shelf");
+  if (!shelf) return;
+  if (state.composerAttachments.length === 0) {
+    shelf.classList.remove("visible");
+    shelf.innerHTML = "";
+    return;
+  }
+  shelf.classList.add("visible");
+  shelf.innerHTML = state.composerAttachments
+    .map(
+      (att) => `
+    <div class="attachment-pill" data-att-id="${escapeHtml(att.id)}">
+      ${
+        att.isImage || (att.mimeType && att.mimeType.startsWith("image/"))
+          ? `<img src="${escapeHtml(att.previewUrl)}" class="attachment-thumb" data-action="open-lightbox" data-src="${escapeHtml(att.previewUrl)}" data-caption="${escapeHtml(att.filename)}" alt="thumb" />`
+          : `<span class="attachment-doc-icon">📄</span>`
+      }
+      <span class="attachment-name" title="${escapeHtml(att.filename)}">${escapeHtml(att.filename)}${att.uploading ? " (uploading…)" : ""}</span>
+      <button class="attachment-remove-btn" data-action="remove-attachment" data-id="${escapeHtml(att.id)}" title="Remove">✕</button>
+    </div>
+  `
+    )
+    .join("");
+
+  shelf.querySelectorAll('[data-action="remove-attachment"]').forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const id = btn.getAttribute("data-id");
+      removeAttachment(id);
+    });
+  });
+}
+
 function bindComposerEvents() {
   const dock = document.getElementById("composer-dock");
   if (!dock) return;
 
   const shortcutsBtn = dock.querySelector("[data-action='open-shortcuts']");
   if (shortcutsBtn) shortcutsBtn.addEventListener("click", () => openModal("shortcuts"));
+
+  const pickBtn = dock.querySelector("[data-action='pick-attachment']");
+  const fileInput = document.getElementById("composer-file-input");
+  if (pickBtn && fileInput) {
+    pickBtn.addEventListener("click", () => {
+      hapticTick();
+      fileInput.click();
+    });
+    fileInput.addEventListener("change", async () => {
+      const files = Array.from(fileInput.files || []);
+      for (const file of files) {
+        await uploadAndAttachFile(file);
+      }
+      fileInput.value = "";
+    });
+  }
 
   const toggleModeBtn = dock.querySelector("[data-action='toggle-composer-mode']");
   if (toggleModeBtn) {
@@ -2886,21 +3124,46 @@ function bindComposerEvents() {
 
   const ta = document.getElementById("composer-textarea");
   if (ta) {
+    const autoResize = () => {
+      ta.style.height = "auto";
+      const newHeight = Math.min(180, Math.max(32, ta.scrollHeight));
+      ta.style.height = `${newHeight}px`;
+    };
+
     ta.addEventListener("input", () => {
       state.composerText = ta.value;
       if (state.activeSurfaceId) {
         state.draftsBySurface[state.activeSurfaceId] = ta.value;
       }
-      ta.style.height = "auto";
-      ta.style.height = Math.min(110, ta.scrollHeight) + "px";
+      autoResize();
     });
+
     ta.addEventListener("keydown", async (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         await submitComposer();
       }
     });
+
+    // Seamless multimedia paste (Mac Cmd+V, iOS Paste, Android Gboard paste)
+    ta.addEventListener("paste", async (e) => {
+      const cData = e.clipboardData;
+      if (!cData) return;
+      const items = Array.from(cData.items || []);
+      const mediaItems = items.filter((it) => it.type.startsWith("image/") || it.kind === "file");
+      if (mediaItems.length > 0) {
+        e.preventDefault();
+        for (const item of mediaItems) {
+          const file = item.getAsFile();
+          if (file) {
+            await uploadAndAttachFile(file);
+          }
+        }
+      }
+    });
   }
+
+  renderAttachmentsShelf();
 }
 
 function bindTerminalDockEvents() {
@@ -3068,6 +3331,21 @@ function bindModalEvents() {
     promptInp.addEventListener("input", (e) => {
       state.spawnForm.initialPrompt = e.target.value;
     });
+    promptInp.addEventListener("paste", async (e) => {
+      const cData = e.clipboardData;
+      if (!cData) return;
+      const items = Array.from(cData.items || []);
+      const mediaItems = items.filter((it) => it.type.startsWith("image/") || it.kind === "file");
+      if (mediaItems.length > 0) {
+        e.preventDefault();
+        for (const item of mediaItems) {
+          const file = item.getAsFile();
+          if (file) {
+            await uploadAndAttachFile(file, promptInp);
+          }
+        }
+      }
+    });
   }
 
   root.querySelectorAll("[data-action='confirm-spawn']").forEach((el) => {
@@ -3142,15 +3420,28 @@ document.addEventListener(
 
 async function submitComposer() {
   const ta = document.getElementById("composer-textarea");
-  const raw = (ta ? ta.value : state.composerText).trim();
-  if (!raw || !state.activeSurfaceId) return;
+  let raw = (ta ? ta.value : state.composerText).trim();
+  const hasAttachments = state.composerAttachments.length > 0;
+  if (!raw && !hasAttachments) return;
+  if (!state.activeSurfaceId) return;
+
+  const currentAttachments = [...state.composerAttachments];
+  state.composerAttachments = [];
+  renderAttachmentsShelf();
+
+  // If attachments exist, append file paths to prompt
+  let fullPrompt = raw;
+  if (currentAttachments.length > 0) {
+    const filePaths = currentAttachments.map((a) => a.filePath || a.previewUrl).join("\n");
+    fullPrompt = fullPrompt ? `${fullPrompt}\n\n${filePaths}` : filePaths;
+  }
 
   const textToSend =
     state.composerMode === "shell" &&
     state.surfaceDetail?.surface?.agentKind === "claude" &&
-    !raw.startsWith("!")
-      ? `! ${raw}`
-      : raw;
+    !fullPrompt.startsWith("!")
+      ? `! ${fullPrompt}`
+      : fullPrompt;
 
   const surfId = state.activeSurfaceId;
   const wsId = state.activeWorkspaceId;
@@ -3172,7 +3463,7 @@ async function submitComposer() {
   }
   state.optimisticTurnsBySurface[surfId].push({
     role: "user",
-    text: raw,
+    text: fullPrompt,
     timestamp: new Date().toISOString(),
     isOptimistic: true,
   });
@@ -3184,10 +3475,15 @@ async function submitComposer() {
     const oldPulse = vp.querySelector(".optimistic-assistant-pulse");
     if (oldPulse) oldPulse.remove();
 
-    const userDiv = document.createElement("div");
-    userDiv.className = "turn-user turn-slide-in";
-    userDiv.textContent = raw;
-    vp.appendChild(userDiv);
+    const dummyUserTurn = {
+      role: "user",
+      text: fullPrompt,
+      isOptimistic: true,
+    };
+    const userContainer = document.createElement("div");
+    userContainer.innerHTML = renderUserTurn(dummyUserTurn);
+    const userDiv = userContainer.firstElementChild;
+    if (userDiv) vp.appendChild(userDiv);
 
     const agentMeta = AGENT_META[state.surfaceDetail?.surface?.agentKind] || AGENT_META.shell;
     const pulseDiv = document.createElement("div");
@@ -3302,7 +3598,7 @@ if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").catch(() => {});
 }
 
-// Delegated click listener for Jump to Latest
+// Delegated click listener for Jump to Latest and Lightbox
 document.addEventListener("click", (e) => {
   const jumpBtn = e.target.closest("#jump-bottom-btn") || e.target.closest("[data-action='jump-bottom']");
   if (jumpBtn) {
@@ -3310,6 +3606,39 @@ document.addEventListener("click", (e) => {
     e.stopPropagation();
     hapticTick("light");
     scrollToViewportBottom(true);
+    return;
+  }
+
+  const lbTrigger = e.target.closest('[data-action="open-lightbox"]');
+  if (lbTrigger) {
+    const src = lbTrigger.getAttribute("data-src");
+    const caption = lbTrigger.getAttribute("data-caption") || "";
+    if (src) {
+      e.preventDefault();
+      e.stopPropagation();
+      openLightboxModal(src, caption);
+      return;
+    }
+  }
+});
+
+// Drag and drop multimedia files
+window.addEventListener("dragover", (e) => {
+  if (state.screen === "surface") {
+    e.preventDefault();
+    document.getElementById("composer-dock")?.classList.add("drag-over");
+  }
+});
+window.addEventListener("dragleave", () => {
+  document.getElementById("composer-dock")?.classList.remove("drag-over");
+});
+window.addEventListener("drop", async (e) => {
+  document.getElementById("composer-dock")?.classList.remove("drag-over");
+  if (state.screen === "surface" && e.dataTransfer?.files?.length) {
+    e.preventDefault();
+    for (const file of Array.from(e.dataTransfer.files)) {
+      await uploadAndAttachFile(file);
+    }
   }
 });
 

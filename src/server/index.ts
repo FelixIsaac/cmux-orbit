@@ -13,7 +13,9 @@ import {
   escapeShellArg,
   formatDirectoryEntry,
   inspectGitWorkspace,
+  isMediaSafeAndAllowed,
   isPathSafeAndAllowed,
+  MEDIA_DIR,
   readFilePreview,
   resolveSafeFilePath,
 } from "./workspaceInspector";
@@ -157,9 +159,13 @@ export function isCsrfSafe(req: Request): boolean {
   const origin = req.headers.get("origin");
   if (origin) {
     try {
-      const origHost = new URL(origin).host;
-      if (!isValidHostHeader(origHost)) {
+      const origUrl = new URL(origin);
+      if (!isValidHostHeader(origUrl.host)) {
         return false;
+      }
+      const host = req.headers.get("host") || "";
+      if (host && origUrl.host.toLowerCase() === host.toLowerCase()) {
+        return true;
       }
     } catch {
       return false;
@@ -181,7 +187,7 @@ function withSecurityHeaders(res: Response, extraHeaders?: Record<string, string
   res.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
   res.headers.set(
     "Content-Security-Policy",
-    "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' ws: wss:; img-src 'self' data:;"
+    "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' ws: wss:; img-src 'self' data: blob:;"
   );
   if (extraHeaders) {
     for (const [k, v] of Object.entries(extraHeaders)) {
@@ -539,6 +545,93 @@ export function startOrbitServer(port = Number(process.env.PORT || 4400)) {
           return jsonResponse({ ok: true, data: feed?.items || [] });
         } catch (err: any) {
           return jsonResponse({ ok: false, error: err?.message || "Failed to fetch feed" }, 500);
+        }
+      }
+
+      if (pathname === "/api/media" && (req.method === "GET" || req.method === "HEAD")) {
+        const rawPath = url.searchParams.get("path") || "";
+        if (!rawPath) {
+          return jsonResponse({ ok: false, error: "path is required" }, 400);
+        }
+        const fullPath = resolveSafeFilePath(rawPath);
+        const safe = isMediaSafeAndAllowed(fullPath);
+        if (!safe.ok) {
+          return jsonResponse({ ok: false, error: safe.error || "Media access denied" }, 403);
+        }
+        if (!existsSync(fullPath)) {
+          return jsonResponse({ ok: false, error: "Media file not found" }, 404);
+        }
+
+        const lower = fullPath.toLowerCase();
+        let contentType = "application/octet-stream";
+        if (lower.endsWith(".png")) contentType = "image/png";
+        else if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) contentType = "image/jpeg";
+        else if (lower.endsWith(".gif")) contentType = "image/gif";
+        else if (lower.endsWith(".webp")) contentType = "image/webp";
+        else if (lower.endsWith(".svg")) contentType = "image/svg+xml";
+        else if (lower.endsWith(".bmp")) contentType = "image/bmp";
+        else if (lower.endsWith(".ico")) contentType = "image/x-icon";
+        else if (lower.endsWith(".pdf")) contentType = "application/pdf";
+        else if (lower.endsWith(".txt") || lower.endsWith(".log")) contentType = "text/plain; charset=utf-8";
+        else if (lower.endsWith(".md")) contentType = "text/markdown; charset=utf-8";
+        else if (lower.endsWith(".json")) contentType = "application/json; charset=utf-8";
+
+        const bunFile = Bun.file(fullPath);
+        const res = new Response(bunFile, {
+          headers: {
+            "Content-Type": contentType,
+            "Cache-Control": "public, max-age=86400",
+            "X-Content-Type-Options": "nosniff",
+          },
+        });
+        return withSecurityHeaders(res);
+      }
+
+      if (pathname === "/api/upload" && req.method === "POST") {
+        if (!isCsrfSafe(req)) {
+          return jsonResponse({ ok: false, error: "Forbidden cross-origin upload request" }, 403);
+        }
+        try {
+          const formData = await req.formData();
+          const file = formData.get("file");
+          if (!file || typeof file === "string") {
+            return jsonResponse({ ok: false, error: "No file uploaded in 'file' field" }, 400);
+          }
+          const blob = file as File;
+          const originalName = blob.name || "upload.png";
+          const rawExt = extname(originalName).toLowerCase() || ".png";
+          const cleanExt = rawExt.replace(/[^a-z0-9.]/g, "") || ".png";
+
+          const ALLOWED_EXTS = new Set([
+            ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico", ".pdf",
+            ".txt", ".md", ".json", ".csv", ".log"
+          ]);
+          if (!ALLOWED_EXTS.has(cleanExt)) {
+            return jsonResponse({ ok: false, error: `Disallowed upload file extension: ${cleanExt}` }, 400);
+          }
+
+          if (!existsSync(MEDIA_DIR)) {
+            mkdirSync(MEDIA_DIR, { recursive: true });
+          }
+
+          const filename = `media-${Date.now()}-${randomBytes(4).toString("hex")}${cleanExt}`;
+          const targetPath = join(MEDIA_DIR, filename);
+
+          const arrayBuffer = await blob.arrayBuffer();
+          await Bun.write(targetPath, arrayBuffer);
+
+          const previewUrl = `/api/media?path=${encodeURIComponent(targetPath)}`;
+
+          return jsonResponse({
+            ok: true,
+            filePath: targetPath,
+            filename: originalName,
+            size: blob.size,
+            mimeType: blob.type || "application/octet-stream",
+            previewUrl,
+          });
+        } catch (err: any) {
+          return jsonResponse({ ok: false, error: err?.message || "Upload failed" }, 500);
         }
       }
 

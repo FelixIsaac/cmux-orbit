@@ -128,6 +128,95 @@ export function isPathSafeAndAllowed(targetPath: string): { ok: boolean; error?:
   return { ok: true };
 }
 
+export const MEDIA_DIR = "/tmp/cmux-orbit-media";
+
+export function isMediaSafeAndAllowed(targetPath: string): { ok: boolean; error?: string } {
+  if (!targetPath || targetPath.includes("\0")) {
+    return { ok: false, error: "Invalid path: null bytes forbidden" };
+  }
+  let p = targetPath.trim();
+  if (p.startsWith("~/")) {
+    p = join(HOME, p.slice(2));
+  }
+  const resolved = resolve(p);
+  let canonical = resolved;
+  try {
+    if (existsSync(resolved)) {
+      canonical = realpathSync(resolved);
+    }
+  } catch {}
+
+  const lower = canonical.toLowerCase();
+  const lowerBase = basename(canonical).toLowerCase();
+
+  // Block sensitive credential directories in HOME
+  const blockedDirs = [
+    join(HOME, ".ssh").toLowerCase(),
+    join(HOME, ".aws").toLowerCase(),
+    join(HOME, ".gnupg").toLowerCase(),
+    join(HOME, ".config/gcloud").toLowerCase(),
+    join(HOME, ".local/state/cmux-orbit").toLowerCase(),
+  ];
+  for (const b of blockedDirs) {
+    if (lower === b || lower.startsWith(b + "/")) {
+      return { ok: false, error: "Access to credential directory denied" };
+    }
+  }
+
+  // Block sensitive credential filenames
+  if (
+    lowerBase === ".env" ||
+    lowerBase.startsWith(".env.") ||
+    lowerBase === "credentials" ||
+    lowerBase === "id_rsa" ||
+    lowerBase === "id_ed25519" ||
+    lowerBase === "id_ecdsa" ||
+    lowerBase === "authorized_keys" ||
+    lowerBase.endsWith(".pem") ||
+    lowerBase.endsWith(".key") ||
+    lowerBase.endsWith(".p12") ||
+    lowerBase.endsWith(".pfx")
+  ) {
+    return { ok: false, error: "Access to sensitive credential file denied" };
+  }
+
+  // Block root system directories EXCEPT /tmp, /private/tmp, and /var/folders (macOS clipboard / TMPDIR)
+  if (
+    lower.startsWith("/etc") ||
+    lower.startsWith("/private/etc") ||
+    lower.startsWith("/system") ||
+    lower.startsWith("/library/keychains")
+  ) {
+    return { ok: false, error: "Access to system directory denied" };
+  }
+
+  // Check if it is an allowed image or document extension
+  const ALLOWED_MEDIA_EXTS = new Set([
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico", ".pdf",
+    ".txt", ".md", ".json", ".csv", ".log"
+  ]);
+  const dotIdx = lowerBase.lastIndexOf(".");
+  const ext = dotIdx !== -1 ? lowerBase.slice(dotIdx) : "";
+  if (!ALLOWED_MEDIA_EXTS.has(ext)) {
+    return { ok: false, error: `Disallowed media extension: ${ext}` };
+  }
+
+  // Allow if in MEDIA_DIR or /tmp or /private/tmp or /var/folders or within HOME
+  if (
+    lower.startsWith("/tmp/") ||
+    lower.startsWith("/private/tmp/") ||
+    lower.startsWith("/var/folders/") ||
+    lower.startsWith("/private/var/folders/") ||
+    lower.startsWith(HOME.toLowerCase() + "/") ||
+    lower === HOME.toLowerCase()
+  ) {
+    return { ok: true };
+  }
+
+  return { ok: false, error: "Media path outside allowed boundaries" };
+}
+
+
 export function resolveSafeFilePath(rawPath: string, baseCwd?: string): string {
   let p = rawPath.trim();
   if (p.startsWith("~/")) {
