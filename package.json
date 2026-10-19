@@ -9,7 +9,11 @@
   "scripts": {
     "start": "bun run src/server/index.ts",
     "dev": "bun --watch run src/server/index.ts",
-    "test": "bun test"
+    "test": "bun test",
+    "daemon:install": "bash scripts/install-launchd.sh",
+    "daemon:restart": "launchctl kickstart -k gui/$(id -u)/com.felix.cmux-orbit",
+    "daemon:status": "launchctl print gui/$(id -u)/com.felix.cmux-orbit",
+    "daemon:uninstall": "launchctl bootout gui/$(id -u)/com.felix.cmux-orbit 2>/dev/null || true; rm -f ~/Library/LaunchAgents/com.felix.cmux-orbit.plist"
   },
   "keywords": [
     "cmux",
