@@ -1,4 +1,4 @@
-import { cmuxRpc } from "./cmuxSocket";
+import { cmuxRpc, isCmuxConnected, resolveCmuxSocketPath } from "./cmuxSocket";
 import {
   analyzeScreenText,
   type AgentStatusTelemetry,
@@ -13,7 +13,7 @@ import {
   type ConversationMessage,
   type HookSessionMetadata,
 } from "./transcriptEngine";
-import { listRecentDirectories, readFilePreview } from "./workspaceInspector";
+import { listRecentDirectories, readFilePreview, redactSecrets } from "./workspaceInspector";
 
 export type AgentBrand =
   | "claude"
@@ -62,6 +62,8 @@ export interface OrbitDashboardSnapshot {
   timestamp: string;
   stateHash?: string;
   hostName: string;
+  cmuxConnected: boolean;
+  cmuxSocketPath?: string;
   totalWorkspaces: number;
   totalSurfaces: number;
   needsInputCount: number;
@@ -210,6 +212,19 @@ async function _buildDashboardSnapshotInternal(): Promise<OrbitDashboardSnapshot
     cmuxRpc<any>("current.list", {}, 3000).catch(() => null),
     getVaultSessions(false),
   ]);
+
+  const cmuxOnline = isCmuxConnected();
+
+  // If cmux is unreachable or restarting, preserve existing cached workspaces
+  // so the user interface never flashes empty or drops their workspace context.
+  if (!mobileWsRes && cachedDashboard?.snapshot?.workspaces?.length) {
+    return {
+      ...cachedDashboard.snapshot,
+      timestamp: new Date().toISOString(),
+      cmuxConnected: false,
+      cmuxSocketPath: resolveCmuxSocketPath(),
+    };
+  }
 
   const { bySurfaceId, bySessionId } = loadHookSessions();
   const vaultFileMap = new Map<string, string>();
@@ -385,6 +400,8 @@ async function _buildDashboardSnapshotInternal(): Promise<OrbitDashboardSnapshot
     timestamp: new Date().toISOString(),
     stateHash,
     hostName: "felixs-helm",
+    cmuxConnected: cmuxOnline,
+    cmuxSocketPath: resolveCmuxSocketPath(),
     totalWorkspaces: workspaces.length,
     totalSurfaces,
     needsInputCount,
@@ -557,15 +574,26 @@ export async function getSurfaceDetail(
   const modeDefault: "agent" | "markdown" | "terminal" =
     surf.agentKind !== "shell" || messages.length > 0 ? "agent" : "terminal";
 
+  const sanitizedMessages = messages.map((m) => ({
+    ...m,
+    text: redactSecrets(m.text),
+    thinking: m.thinking ? redactSecrets(m.thinking) : undefined,
+    toolCalls: m.toolCalls.map((tc) => ({
+      ...tc,
+      input: tc.input ? redactSecrets(tc.input) : undefined,
+      output: tc.output ? redactSecrets(tc.output) : undefined,
+    })),
+  }));
+
   return {
     workspaceId: ws.id,
     surface: surf,
     modeDefault,
-    messages,
-    rawTerminalText,
-    rawTerminalAnsi,
-    cleanTerminalText: analysis.cleanLines.join("\n"),
-    liveProseSnippet: analysis.liveProseSnippet,
+    messages: sanitizedMessages,
+    rawTerminalText: redactSecrets(rawTerminalText),
+    rawTerminalAnsi: redactSecrets(rawTerminalAnsi),
+    cleanTerminalText: redactSecrets(analysis.cleanLines.join("\n")),
+    liveProseSnippet: analysis.liveProseSnippet ? redactSecrets(analysis.liveProseSnippet) : null,
     detectedPrompt: analysis.prompt,
     telemetry: analysis.telemetry,
     detectedFiles: analysis.detectedFiles,

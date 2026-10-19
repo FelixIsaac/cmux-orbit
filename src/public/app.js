@@ -764,7 +764,21 @@ function connectWebSocket() {
   ws.onmessage = (event) => {
     try {
       const msg = JSON.parse(event.data);
-      if (msg.type === "dashboard" && msg.data) {
+      if (msg.type === "cmux_status") {
+        const wasCmuxConnected = state.cmuxConnected;
+        state.cmuxConnected = Boolean(msg.connected);
+        updateCmuxStatusIndicator(state.cmuxConnected);
+        if (state.cmuxConnected && wasCmuxConnected === false) {
+          fetchDashboard();
+          if (state.screen === "surface" && state.activeSurfaceId) {
+            fetchSurfaceDetail(state.activeWorkspaceId, state.activeSurfaceId);
+          }
+        }
+      } else if (msg.type === "dashboard" && msg.data) {
+        if (typeof msg.data.cmuxConnected === "boolean") {
+          state.cmuxConnected = msg.data.cmuxConnected;
+          updateCmuxStatusIndicator(state.cmuxConnected);
+        }
         if (msg.data.stateHash && msg.data.stateHash === state.dashboardHash) {
           return;
         }
@@ -860,14 +874,50 @@ function updateConnectionStatus(connected) {
   }
 }
 
+function updateCmuxStatusIndicator(connected) {
+  state.cmuxConnected = connected;
+  const banner = document.getElementById("cmux-banner");
+  if (banner) {
+    banner.classList.toggle("visible", !connected);
+  }
+}
+
+function showToast(message, durationMs = 3200) {
+  let toast = document.getElementById("orbit-toast");
+  if (!toast) {
+    toast = document.createElement("div");
+    toast.id = "orbit-toast";
+    toast.className = "orbit-toast";
+    document.body.appendChild(toast);
+  }
+  toast.textContent = message;
+  toast.classList.add("visible");
+  clearTimeout(toast._timer);
+  toast._timer = setTimeout(() => {
+    toast.classList.remove("visible");
+  }, durationMs);
+}
+
 async function apiPost(body) {
   hapticTick();
-  const res = await fetch("/api/action", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return res.json();
+  try {
+    const res = await fetch("/api/action", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Orbit-Request": "1",
+      },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok && !data.ok) {
+      showToast(data.error || "Action failed");
+    }
+    return data;
+  } catch (err) {
+    showToast(err?.message || "Network error");
+    return { ok: false, error: err?.message };
+  }
 }
 
 async function openSurface(workspaceId, surfaceId, pushHistory = true) {

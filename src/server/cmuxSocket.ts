@@ -195,6 +195,7 @@ export class CmuxEventStream {
       socket: {
         open: (socket) => {
           this.activeSocket = socket;
+          setCmuxConnected(true);
           const subReq =
             JSON.stringify({
               id: "orbit-stream",
@@ -223,13 +224,16 @@ export class CmuxEventStream {
           }
         },
         error: () => {
+          setCmuxConnected(false);
           this.scheduleReconnect();
         },
         close: () => {
+          setCmuxConnected(false);
           this.scheduleReconnect();
         },
       },
     }).catch(() => {
+      setCmuxConnected(false);
       this.scheduleReconnect();
     });
   }
@@ -239,4 +243,27 @@ export class CmuxEventStream {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = setTimeout(() => this.connectLoop(), 2000);
   }
+}
+
+let _cmuxConnected = false;
+const _connectionListeners = new Set<(connected: boolean) => void>();
+
+function setCmuxConnected(val: boolean) {
+  if (_cmuxConnected !== val) {
+    _cmuxConnected = val;
+    for (const cb of _connectionListeners) {
+      try {
+        cb(val);
+      } catch {}
+    }
+  }
+}
+
+export function isCmuxConnected(): boolean {
+  return _cmuxConnected;
+}
+
+export function onCmuxConnectionChange(cb: (connected: boolean) => void): () => void {
+  _connectionListeners.add(cb);
+  return () => _connectionListeners.delete(cb);
 }

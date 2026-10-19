@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 
@@ -32,6 +32,102 @@ export interface FilePreviewResult {
 
 const HOME = homedir();
 
+const SECRET_PATTERNS = [
+  /sk-ant-[a-zA-Z0-9_\-]{20,}/g, // Anthropic API keys
+  /sk-(?:proj-|live-|test-)?[a-zA-Z0-9_\-]{24,}/g, // OpenAI API keys
+  /gh[pousr]_[a-zA-Z0-9]{30,}/g, // GitHub PATs
+  /github_pat_[a-zA-Z0-9_]{30,}/g, // GitHub fine-grained PAT
+  /(?:AKIA|ASIA)[A-Z0-9]{16}/g, // AWS Access Key ID
+  /-----BEGIN (?:[A-Z0-9 ]+)?PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z0-9 ]+)?PRIVATE KEY-----/g, // Private keys
+  /(?:Bearer\s+)[a-zA-Z0-9\-_.]+\.[a-zA-Z0-9\-_.]+/gi, // Bearer tokens
+];
+
+export function redactSecrets(text: string): string {
+  if (!text) return text;
+  let sanitized = text;
+  for (const pattern of SECRET_PATTERNS) {
+    sanitized = sanitized.replace(pattern, "[REDACTED SECRET]");
+  }
+  return sanitized;
+}
+
+export function escapeShellArg(arg: string): string {
+  return `'${arg.replace(/'/g, "'\\''")}'`;
+}
+
+export function isPathSafeAndAllowed(targetPath: string): { ok: boolean; error?: string } {
+  if (targetPath.includes("\0")) {
+    return { ok: false, error: "Invalid path: null bytes forbidden" };
+  }
+  let p = targetPath.trim();
+  if (p.startsWith("~/")) {
+    p = join(HOME, p.slice(2));
+  }
+  const resolved = resolve(p);
+
+  // Check realpath if it exists to prevent symlink traversal
+  let canonical = resolved;
+  try {
+    if (existsSync(resolved)) {
+      canonical = realpathSync(resolved);
+    }
+  } catch {}
+
+  const lower = canonical.toLowerCase();
+  const lowerBase = basename(canonical).toLowerCase();
+
+  // Block root system directories
+  if (
+    lower.startsWith("/etc") ||
+    lower.startsWith("/private/etc") ||
+    lower.startsWith("/var") ||
+    lower.startsWith("/private/var") ||
+    lower.startsWith("/system") ||
+    lower.startsWith("/library/keychains")
+  ) {
+    return { ok: false, error: "Access to system directory denied" };
+  }
+
+  // Block sensitive credential directories in HOME
+  const blockedDirs = [
+    join(HOME, ".ssh").toLowerCase(),
+    join(HOME, ".aws").toLowerCase(),
+    join(HOME, ".gnupg").toLowerCase(),
+    join(HOME, ".config/gcloud").toLowerCase(),
+    join(HOME, ".local/state/cmux-orbit").toLowerCase(),
+  ];
+
+  for (const b of blockedDirs) {
+    if (lower === b || lower.startsWith(b + "/")) {
+      return { ok: false, error: "Access to credential directory denied" };
+    }
+  }
+
+  // Block sensitive filenames
+  if (
+    lowerBase === ".env" ||
+    lowerBase.startsWith(".env.") ||
+    lowerBase === "credentials" ||
+    lowerBase === "id_rsa" ||
+    lowerBase === "id_ed25519" ||
+    lowerBase === "id_ecdsa" ||
+    lowerBase === "authorized_keys" ||
+    lowerBase.endsWith(".pem") ||
+    lowerBase.endsWith(".key") ||
+    lowerBase.endsWith(".p12") ||
+    lowerBase.endsWith(".pfx")
+  ) {
+    return { ok: false, error: "Access to sensitive credential file denied" };
+  }
+
+  // Containment: must reside inside HOME or explicit workspace roots
+  if (!lower.startsWith(HOME.toLowerCase() + "/") && lower !== HOME.toLowerCase()) {
+    return { ok: false, error: "Access outside home directory denied" };
+  }
+
+  return { ok: true };
+}
+
 export function resolveSafeFilePath(rawPath: string, baseCwd?: string): string {
   let p = rawPath.trim();
   if (p.startsWith("~/")) {
@@ -44,6 +140,19 @@ export function resolveSafeFilePath(rawPath: string, baseCwd?: string): string {
 
 export function readFilePreview(rawPath: string, baseCwd?: string, maxBytes = 250 * 1024): FilePreviewResult {
   const fullPath = resolveSafeFilePath(rawPath, baseCwd);
+  const safety = isPathSafeAndAllowed(fullPath);
+  if (!safety.ok) {
+    return {
+      ok: false,
+      path: fullPath,
+      name: basename(fullPath),
+      content: "",
+      size: 0,
+      modifiedAt: "",
+      error: safety.error || "Access denied",
+    };
+  }
+
   if (!existsSync(fullPath)) {
     return {
       ok: false,
@@ -77,7 +186,7 @@ export function readFilePreview(rawPath: string, baseCwd?: string, maxBytes = 25
       ok: true,
       path: fullPath,
       name: basename(fullPath),
-      content,
+      content: redactSecrets(content),
       size: st.size,
       modifiedAt: st.mtime.toISOString(),
     };
