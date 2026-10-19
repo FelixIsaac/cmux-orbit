@@ -21,12 +21,14 @@ let package = Package(
         .executableTarget(
             name: "CmuxOrbitMac",
             dependencies: ["CmuxCore"],
-            path: "Sources/CmuxOrbitMac"
+            path: "Sources/CmuxOrbitMac",
+            exclude: ["Info.plist"]
         ),
         .target(
             name: "CmuxOrbitIOS",
             dependencies: ["CmuxCore"],
-            path: "Sources/CmuxOrbitIOS"
+            path: "Sources/CmuxOrbitIOS",
+            exclude: ["Info.plist"]
         ),
     ]
 )

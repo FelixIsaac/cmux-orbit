@@ -1,7 +1,7 @@
 import Foundation
 import UserNotifications
 
-public final class NotificationEngine: NSObject, UNUserNotificationCenterDelegate, Sendable {
+public final class NotificationEngine: NSObject, UNUserNotificationCenterDelegate, @unchecked Sendable {
     public static let shared = NotificationEngine()
 
     public static let categoryApproval = "CMUX_ACTION_APPROVAL"

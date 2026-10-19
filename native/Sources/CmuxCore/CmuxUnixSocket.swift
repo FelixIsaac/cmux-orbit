@@ -40,21 +40,23 @@ public actor CmuxUnixSocket {
         self.connection = conn
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            var resumed = false
+            final class ContinuationBox: @unchecked Sendable { var resumed = false }
+            let box = ContinuationBox()
+
             conn.stateUpdateHandler = { [weak self] state in
                 guard let self = self else { return }
                 switch state {
                 case .ready:
                     Task { await self.setConnected(true) }
-                    if !resumed {
-                        resumed = true
+                    if !box.resumed {
+                        box.resumed = true
                         continuation.resume()
                     }
                     Task { await self.startReading() }
                 case .failed(let err):
                     Task { await self.setConnected(false) }
-                    if !resumed {
-                        resumed = true
+                    if !box.resumed {
+                        box.resumed = true
                         continuation.resume(throwing: err)
                     }
                 case .cancelled:
@@ -82,7 +84,7 @@ public actor CmuxUnixSocket {
         try await connect()
 
         let reqId = UUID().uuidString
-        var payload: [String: Any] = [
+        let payload: [String: Any] = [
             "id": reqId,
             "method": method,
             "params": params
