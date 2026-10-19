@@ -645,92 +645,76 @@ window.copyTerminalText = function () {
   }
 };
 
+let markedConfigured = false;
+function ensureMarkedConfigured() {
+  if (markedConfigured || typeof marked === "undefined") return;
+  marked.use({
+    gfm: true,
+    breaks: true,
+    renderer: {
+      code(token) {
+        const cleanCode = (token.text || "").replace(/\n$/, "");
+        const lang = (token.lang || "text").trim().split(/\s+/)[0];
+        const highlighted = highlightCode(cleanCode, lang);
+        return `<div class="code-block-wrapper"><div class="code-header"><span>${escapeHtml(lang || "text")}</span><button class="copy-code-btn" onclick="copyCodeSnippet(this)">Copy</button></div><pre><code class="lang-${escapeHtml(lang || "text")}">${highlighted}</code></pre></div>\n`;
+      },
+      table(token) {
+        return `<div class="table-container">${marked.Renderer.prototype.table.call(this, token)}</div>\n`;
+      },
+      blockquote(token) {
+        // Detect GitHub-style Callout Alerts: > [!NOTE], > [!TIP], > [!IMPORTANT], > [!WARNING], > [!CAUTION]
+        const match = token.text.match(/^\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]([^\n]*)?(?:\n([\s\S]*))?$/i);
+        if (match) {
+          const type = match[1].toLowerCase();
+          const title = match[2] ? match[2].trim() : "";
+          const bodyMarkdown = match[3] ? match[3].trim() : "";
+          const bodyHtml = bodyMarkdown ? marked.parse(bodyMarkdown) : "";
+          const icons = {
+            note: "ℹ️ Note",
+            tip: "💡 Tip",
+            important: "⚡ Important",
+            warning: "⚠️ Warning",
+            caution: "🛑 Caution",
+          };
+          return `<div class="callout-alert ${type}"><div class="callout-title">${icons[type] || type}${title ? `: ${escapeHtml(title)}` : ""}</div>${bodyHtml ? `<div class="callout-body">${bodyHtml}</div>` : ""}</div>\n`;
+        }
+        return `<blockquote>\n${marked.parse(token.text)}</blockquote>\n`;
+      },
+      link({ href, title, text }) {
+        const cleanHref = (href || "").trim();
+        // Prevent javascript: pseudo-protocol XSS
+        if (/^\s*javascript:/i.test(cleanHref)) {
+          return `<span>${text}</span>`;
+        }
+        const cleanTitle = title ? ` title="${escapeHtml(title)}"` : "";
+        const isExternal = cleanHref.startsWith("http://") || cleanHref.startsWith("https://");
+        const targetAttr = isExternal ? ' target="_blank" rel="noopener noreferrer"' : "";
+        return `<a href="${escapeHtml(cleanHref)}"${cleanTitle}${targetAttr}>${text}</a>`;
+      },
+      html(token) {
+        // Sanitize raw inline HTML tags to prevent XSS from LLM outputs
+        return (token.text || token.raw || "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      },
+      checkbox({ checked }) {
+        return `<span class="task-check ${checked ? "" : "unchecked"}">${checked ? "✓" : ""}</span> `;
+      }
+    }
+  });
+  markedConfigured = true;
+}
+
 function renderMarkdown(md) {
   if (!md) return "";
-  let text = escapeHtml(md);
-
-  // Extract fenced code blocks first with syntax highlighting
-  const codeBlocks = [];
-  text = text.replace(/```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g, (_m, lang, code) => {
-    const idx = codeBlocks.length;
-    const cleanCode = code.trimEnd();
-    const highlighted = highlightCode(cleanCode, lang);
-    codeBlocks.push(
-      `<div class="code-block-wrapper"><div class="code-header"><span>${escapeHtml(lang || "text")}</span><button class="copy-code-btn" onclick="copyCodeSnippet(this)">Copy</button></div><pre><code class="lang-${lang || "text"}">${highlighted}</code></pre></div>`
-    );
-    return `@@CODEBLOCK_${idx}@@`;
-  });
-
-  // Callout Alerts
-  text = text.replace(
-    /^(?:&gt;\s*)+\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]([^\n]*)\n([\s\S]*?)(?=(?:\n{2,}|\n(?=[^&])|$))/gim,
-    (_m, type, title, body) => {
-      const t = type.toLowerCase();
-      const icons = {
-        note: "ℹ️ Note",
-        tip: "💡 Tip",
-        important: "⚡ Important",
-        warning: "⚠️ Warning",
-        caution: "🛑 Caution",
-      };
-      const cleanBody = body.replace(/^(?:&gt;\s*)+/gm, "").trim();
-      return `<div class="callout-alert ${t}"><div class="callout-title">${icons[t] || type}${title ? `: ${title.trim()}` : ""}</div><div class="callout-body">${cleanBody}</div></div>`;
+  if (typeof marked !== "undefined") {
+    ensureMarkedConfigured();
+    try {
+      return marked.parse(md);
+    } catch {
+      // Fall back on parse error
     }
-  );
-
-  // Markdown tables
-  text = text.replace(/((?:^|\n)\|[^\n]+\|\n\|[-:\s|]+\|\n(?:\|[^\n]+\|\n?)+)/g, (match) => {
-    const lines = match.trim().split("\n");
-    if (lines.length < 3) return match;
-    const headerCells = lines[0].split("|").slice(1, -1).map(c => `<th>${c.trim()}</th>`).join("");
-    const bodyRows = lines.slice(2).map(row => {
-      const cells = row.split("|").slice(1, -1).map(c => `<td>${c.trim()}</td>`).join("");
-      return `<tr>${cells}</tr>`;
-    }).join("");
-    return `<div class="table-container"><table><thead><tr>${headerCells}</tr></thead><tbody>${bodyRows}</tbody></table></div>`;
-  });
-
-  // Inline code
-  text = text.replace(/`([^`\n]+)`/g, "<code>$1</code>");
-
-  // Headings
-  text = text.replace(/^####\s+(.+)$/gm, "<h4>$1</h4>");
-  text = text.replace(/^###\s+(.+)$/gm, "<h3>$1</h3>");
-  text = text.replace(/^##\s+(.+)$/gm, "<h2>$1</h2>");
-  text = text.replace(/^#\s+(.+)$/gm, "<h1>$1</h1>");
-
-  // Bold & Italic
-  text = text.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-  text = text.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
-
-  // Bullet lists & Task Checkboxes
-  text = text.replace(/^\s*[-*]\s+\[x\]\s+(.+)$/gm, '<li class="task-item checked"><span class="task-check">✓</span> <span>$1</span></li>');
-  text = text.replace(/^\s*[-*]\s+\[ \]\s+(.+)$/gm, '<li class="task-item"><span class="task-check unchecked"></span> <span>$1</span></li>');
-  text = text.replace(/^\s*[-*]\s+(.+)$/gm, "<li>$1</li>");
-  text = text.replace(/(<li[\s\S]*?<\/li>)/g, "<ul>$1</ul>");
-  text = text.replace(/<\/ul>\s*<ul>/g, "");
-
-  // Paragraphs
-  const blocks = text.split(/\n{2,}/);
-  text = blocks
-    .map((b) => {
-      const t = b.trim();
-      if (!t) return "";
-      if (
-        t.startsWith("<h") ||
-        t.startsWith("<ul") ||
-        t.startsWith("<div") ||
-        t.startsWith("@@CODEBLOCK_")
-      ) {
-        return t;
-      }
-      return `<p>${t.replace(/\n/g, "<br/>")}</p>`;
-    })
-    .join("\n");
-
-  // Restore code blocks
-  text = text.replace(/@@CODEBLOCK_(\d+)@@/g, (_m, i) => codeBlocks[Number(i)] || "");
-  return text;
+  }
+  // Graceful fallback if marked is not available
+  return `<p>${escapeHtml(md).replace(/\n/g, "<br/>")}</p>`;
 }
 
 function shortenPath(p) {
