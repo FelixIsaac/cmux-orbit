@@ -125,9 +125,38 @@ export function resolveTranscriptPath(
   if (hookMeta?.transcriptPath && existsSync(hookMeta.transcriptPath)) {
     return hookMeta.transcriptPath;
   }
+
+  // 0. Antigravity priority lookup: always resolve directly from brain logs
+  if (agentKind === "antigravity") {
+    try {
+      const agyCandidate = join(
+        HOME,
+        ".gemini/antigravity-cli/brain",
+        sessionId,
+        ".system_generated/logs/transcript.jsonl"
+      );
+      if (existsSync(agyCandidate)) {
+        transcriptPathCache.set(sessionId, agyCandidate);
+        return agyCandidate;
+      }
+      const agyFull = join(
+        HOME,
+        ".gemini/antigravity-cli/brain",
+        sessionId,
+        ".system_generated/logs/transcript_full.jsonl"
+      );
+      if (existsSync(agyFull)) {
+        transcriptPathCache.set(sessionId, agyFull);
+        return agyFull;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   if (vaultFileMap?.has(sessionId)) {
     const vf = vaultFileMap.get(sessionId)!;
-    if (existsSync(vf)) return vf;
+    if (!vf.endsWith("history.jsonl") && existsSync(vf)) return vf;
   }
   if (transcriptPathCache.has(sessionId)) {
     const cached = transcriptPathCache.get(sessionId)!;
@@ -217,7 +246,7 @@ export function resolveTranscriptPath(
     // ignore
   }
 
-  // 4. Check ~/.gemini/antigravity-cli/brain/<sessionId>/.system_generated/logs/transcript.jsonl
+  // 4. Check ~/.gemini/antigravity-cli/brain/<sessionId>/.system_generated/logs/transcript.jsonl (and transcript_full.jsonl)
   try {
     const agyCandidate = join(
       HOME,
@@ -228,6 +257,16 @@ export function resolveTranscriptPath(
     if (existsSync(agyCandidate)) {
       transcriptPathCache.set(sessionId, agyCandidate);
       return agyCandidate;
+    }
+    const agyFull = join(
+      HOME,
+      ".gemini/antigravity-cli/brain",
+      sessionId,
+      ".system_generated/logs/transcript_full.jsonl"
+    );
+    if (existsSync(agyFull)) {
+      transcriptPathCache.set(sessionId, agyFull);
+      return agyFull;
     }
   } catch {
     // ignore
@@ -327,11 +366,25 @@ function cleanUserText(raw: string): string {
   if (urMatch) {
     return urMatch[1].trim();
   }
-  // Strip <system-reminder>, <user_info>, <rules>, <context_files> blocks
+  // Strip system injection blocks, guidelines, context summaries, and command artifacts
   s = s
+    .replace(/<CONTEXT_SUMMARY>[\s\S]*?<\/CONTEXT_SUMMARY>/gi, "")
+    .replace(/<SYSTEM_MESSAGE>[\s\S]*?<\/SYSTEM_MESSAGE>/gi, "")
+    .replace(/<ADDITIONAL_METADATA>[\s\S]*?<\/ADDITIONAL_METADATA>/gi, "")
+    .replace(/<USER_SETTINGS_CHANGE>[\s\S]*?<\/USER_SETTINGS_CHANGE>/gi, "")
     .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, "")
     .replace(/<user_info>[\s\S]*?<\/user_info>/gi, "")
+    .replace(/<user_information>[\s\S]*?<\/user_information>/gi, "")
+    .replace(/<identity>[\s\S]*?<\/identity>/gi, "")
+    .replace(/<guidelines>[\s\S]*?<\/guidelines>/gi, "")
+    .replace(/<skills>[\s\S]*?<\/skills>/gi, "")
     .replace(/<rules>[\s\S]*?<\/rules>/gi, "")
+    .replace(/<artifacts>[\s\S]*?<\/artifacts>/gi, "")
+    .replace(/<conversation_transcript>[\s\S]*?<\/conversation_transcript>/gi, "")
+    .replace(/<subagents>[\s\S]*?<\/subagents>/gi, "")
+    .replace(/<messaging>[\s\S]*?<\/messaging>/gi, "")
+    .replace(/<slash_commands>[\s\S]*?<\/slash_commands>/gi, "")
+    .replace(/<communication_style>[\s\S]*?<\/communication_style>/gi, "")
     .replace(/<command-name>(.*?)<\/command-name>/gi, "$1 ")
     .replace(/<command-message>[\s\S]*?<\/command-message>/gi, "")
     .replace(/<command-args>(.*?)<\/command-args>/gi, "$1")
@@ -662,7 +715,7 @@ export function parseTranscriptFile(
     // ---------------------------------------------------------
     if (type === "USER_INPUT" && obj.content) {
       const cleaned = cleanUserText(String(obj.content));
-      if (cleaned && !cleaned.includes("<CONTEXT_SUMMARY>") && !cleaned.includes("<SYSTEM_MESSAGE>")) {
+      if (cleaned) {
         messages.push({
           id: `agy-u-${obj.step_index ?? idx}`,
           role: "user",
@@ -684,6 +737,11 @@ export function parseTranscriptFile(
             id: tcRaw.id || `agy-tc-${idx}-${tools.length}`,
             name: tcRaw.name || "tool",
             summary: tcRaw.arguments?.toolSummary || summarizeToolInput(tcRaw.name || "tool", tcRaw.arguments),
+            input: tcRaw.arguments
+              ? typeof tcRaw.arguments === "string"
+                ? tcRaw.arguments.slice(0, 800)
+                : JSON.stringify(tcRaw.arguments, null, 2).slice(0, 800)
+              : undefined,
             status: "done",
           };
           toolCallMap.set(tc.id, tc);
@@ -691,7 +749,14 @@ export function parseTranscriptFile(
         }
       }
       if (text || thinking || tools.length > 0) {
-        pushOrMergeAssistant(`agy-a-${obj.step_index ?? idx}`, text, thinking, tools, obj.created_at);
+        pushOrMergeAssistant(
+          `agy-a-${obj.step_index ?? idx}`,
+          text,
+          thinking,
+          tools,
+          obj.created_at,
+          obj.model || "Gemini 2.5"
+        );
       }
       continue;
     }
@@ -702,6 +767,18 @@ export function parseTranscriptFile(
         const out = obj.content || obj.output || obj.result;
         tc.output = (typeof out === "string" ? out : JSON.stringify(out)).slice(0, 1200);
         tc.status = obj.status === "ERROR" || obj.is_error ? "error" : "done";
+      }
+      continue;
+    }
+
+    if (type === "GENERIC" && obj.source === "MODEL" && obj.content) {
+      const prev = messages[messages.length - 1];
+      if (prev && prev.role === "assistant" && prev.toolCalls.length > 0) {
+        const pending = [...prev.toolCalls].reverse().find((tc) => !tc.output);
+        if (pending) {
+          pending.output = String(obj.content).slice(0, 1200);
+          pending.status = obj.status === "ERROR" ? "error" : "done";
+        }
       }
       continue;
     }

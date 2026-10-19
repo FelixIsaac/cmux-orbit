@@ -1,3 +1,5 @@
+import { existsSync } from "fs";
+import { join } from "path";
 import { cmuxRpc, isCmuxConnected, resolveCmuxSocketPath } from "./cmuxSocket";
 import {
   analyzeScreenText,
@@ -130,7 +132,20 @@ export async function getVaultSessions(waitIfEmpty = false): Promise<VaultSessio
     vaultRefreshInFlight = cmuxRpc<{ sessions: VaultSessionEntry[] }>("vault.sessions", { limit: 120 }, 4500)
       .then((res) => {
         if (res?.sessions) {
-          cachedVaultSessions = res.sessions;
+          cachedVaultSessions = res.sessions.map((s) => {
+            if (s.agent === "antigravity" && s.file?.endsWith("history.jsonl") && s.session_id) {
+              const brainLog = join(
+                process.env.HOME || "",
+                ".gemini/antigravity-cli/brain",
+                s.session_id,
+                ".system_generated/logs/transcript.jsonl"
+              );
+              if (existsSync(brainLog)) {
+                return { ...s, file: brainLog };
+              }
+            }
+            return s;
+          });
           lastVaultFetchMs = Date.now();
         }
         return cachedVaultSessions;
@@ -232,7 +247,20 @@ async function _buildDashboardSnapshotInternal(): Promise<OrbitDashboardSnapshot
   const vaultFileMap = new Map<string, string>();
   for (const vs of vaultSessions) {
     if (vs.session_id && vs.file) {
-      vaultFileMap.set(vs.session_id, vs.file);
+      if (vs.file.endsWith("history.jsonl")) {
+        const agyBrainLog = join(
+          process.env.HOME || "",
+          ".gemini/antigravity-cli/brain",
+          vs.session_id,
+          ".system_generated/logs/transcript.jsonl"
+        );
+        if (existsSync(agyBrainLog)) {
+          vaultFileMap.set(vs.session_id, agyBrainLog);
+          continue;
+        }
+      } else {
+        vaultFileMap.set(vs.session_id, vs.file);
+      }
     }
   }
 
@@ -537,7 +565,22 @@ export async function getSurfaceDetail(
   const vaultSessions = await getVaultSessions(false);
   const vaultFileMap = new Map<string, string>();
   for (const vs of vaultSessions) {
-    if (vs.session_id && vs.file) vaultFileMap.set(vs.session_id, vs.file);
+    if (vs.session_id && vs.file) {
+      if (vs.file.endsWith("history.jsonl")) {
+        const agyBrainLog = join(
+          process.env.HOME || "",
+          ".gemini/antigravity-cli/brain",
+          vs.session_id,
+          ".system_generated/logs/transcript.jsonl"
+        );
+        if (existsSync(agyBrainLog)) {
+          vaultFileMap.set(vs.session_id, agyBrainLog);
+          continue;
+        }
+      } else {
+        vaultFileMap.set(vs.session_id, vs.file);
+      }
+    }
   }
   const { bySessionId, bySurfaceId } = loadHookSessions();
   const hookMeta =
