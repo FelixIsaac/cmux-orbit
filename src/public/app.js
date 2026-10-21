@@ -884,11 +884,30 @@ function updateConnectionStatus(connected) {
   }
 }
 
+window.launchCmuxApp = async function () {
+  hapticTick("medium");
+  const banner = document.getElementById("cmux-banner");
+  if (banner) {
+    banner.innerHTML = "⏳ Launching cmux on Mac…";
+  }
+  try {
+    const res = await apiPost({ action: "launch_cmux" });
+    if (res?.ok) {
+      showToast("Launching cmux app on Mac…");
+    }
+  } catch (e) {
+    showToast("Failed to launch cmux");
+  }
+};
+
 function updateCmuxStatusIndicator(connected) {
   state.cmuxConnected = connected;
   const banner = document.getElementById("cmux-banner");
   if (banner) {
     banner.classList.toggle("visible", !connected);
+    if (!connected) {
+      banner.innerHTML = `⚠️ cmux app is disconnected <button class="btn-sm" style="margin-left:8px;padding:3px 10px;font-size:11px;background:rgba(255,255,255,0.22);border:1px solid rgba(255,255,255,0.35);color:#fff;border-radius:4px;cursor:pointer;font-weight:600;" onclick="launchCmuxApp()">Launch cmux on Mac</button>`;
+    }
   }
 }
 

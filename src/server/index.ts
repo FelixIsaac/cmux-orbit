@@ -641,6 +641,19 @@ export function startOrbitServer(port = Number(process.env.PORT || 4400)) {
           return jsonResponse({ ok: false, error: "Forbidden cross-origin action request" }, 403);
         }
 
+        const body = await req.json().catch(() => ({}));
+        const action = body?.action;
+
+        // Remote launch cmux app even when socket is disconnected
+        if (action === "launch_cmux") {
+          try {
+            Bun.spawn(["open", "-a", "/Applications/cmux.app"]);
+            return jsonResponse({ ok: true, message: "Launching cmux on Mac..." });
+          } catch (e: any) {
+            return jsonResponse({ ok: false, error: e?.message || "Failed to launch cmux" }, 500);
+          }
+        }
+
         if (!isCmuxConnected()) {
           return jsonResponse(
             {
@@ -652,9 +665,6 @@ export function startOrbitServer(port = Number(process.env.PORT || 4400)) {
         }
 
         try {
-          const body = await req.json();
-          const action = body.action;
-
           if (action === "send_prompt") {
             const { workspaceId, surfaceId, text, submit = true } = body;
             if (!workspaceId || !surfaceId || typeof text !== "string") {
