@@ -2287,6 +2287,8 @@ function renderModal() {
         </div>
       </div>
     `;
+  }
+
   if (state.activeModal === "lightbox" && state.activeLightboxSrc) {
     const src = state.activeLightboxSrc;
     return `
