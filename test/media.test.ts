@@ -88,7 +88,7 @@ The rules section has a number of possible rules/memories/context that you shoul
         unlinkSync(uploadJson.filePath);
       }
     } finally {
-      server.stop(true);
+      server.stop();
     }
   });
 });

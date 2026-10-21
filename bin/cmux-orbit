@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, networkInterfaces } from "node:os";
 import { join, resolve } from "node:path";
 import { resolveCmuxSocketPath } from "../src/server/cmuxSocket";
@@ -50,6 +50,172 @@ if (subcmd === "status") {
   } catch (err: any) {
     console.log(`  Daemon    : ✕ not reachable on port ${port} (${err?.message})`);
   }
+  process.exit(0);
+}
+
+if (subcmd === "open") {
+  const url = `http://localhost:${port}`;
+  console.log(`Opening ${url} in default browser...`);
+  Bun.spawn(["open", url]);
+  process.exit(0);
+}
+
+if (subcmd === "logs") {
+  const logDir = join(homedir(), ".local/state/cmux-orbit");
+  const outFile = join(logDir, "orbit.out.log");
+  const errFile = join(logDir, "orbit.err.log");
+  const isFollow = args.includes("-f") || args.includes("--follow");
+
+  if (!existsSync(outFile)) {
+    console.log(`No logs found at ${outFile}`);
+    process.exit(0);
+  }
+
+  if (isFollow) {
+    console.log(`✦ Streaming live logs from ${outFile} (Ctrl-C to stop)...`);
+    const proc = Bun.spawn(["tail", "-f", "-n", "50", outFile], {
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+    await proc.exited;
+  } else {
+    const lines = args[1] && !args[1].startsWith("-") ? args[1] : "50";
+    console.log(`✦ Last ${lines} lines of ${outFile}:`);
+    const proc = Bun.spawn(["tail", "-n", lines, outFile], {
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+    await proc.exited;
+
+    if (existsSync(errFile) && statSync(errFile).size > 0) {
+      console.log(`\n✦ Recent errors from ${errFile}:`);
+      const errProc = Bun.spawn(["tail", "-n", "20", errFile], {
+        stdout: "inherit",
+        stderr: "inherit",
+      });
+      await errProc.exited;
+    }
+  }
+  process.exit(0);
+}
+
+if (subcmd === "restart") {
+  console.log("Restarting cmux-orbit service...");
+  const uid = Bun.spawnSync(["id", "-u"]).stdout.toString().trim();
+  const kickRes = Bun.spawnSync([
+    "launchctl",
+    "kickstart",
+    "-k",
+    `gui/${uid}/com.felix.cmux-orbit`,
+  ]);
+
+  if (kickRes.exitCode === 0) {
+    console.log("✓ Successfully restarted com.felix.cmux-orbit");
+  } else {
+    // Fallback reload
+    const plistPath = join(homedir(), "Library/LaunchAgents/com.felix.cmux-orbit.plist");
+    if (existsSync(plistPath)) {
+      Bun.spawnSync(["launchctl", "unload", plistPath]);
+      Bun.spawnSync(["launchctl", "load", "-w", plistPath]);
+      console.log("✓ Reloaded service via plist load");
+    } else {
+      console.log("✕ Service not installed. Run: ./bin/cmux-orbit install-service");
+    }
+  }
+  process.exit(0);
+}
+
+if (subcmd === "doctor") {
+  console.log("✦ cmux-orbit System & Health Diagnostics\n");
+
+  // 1. Runtime
+  console.log(`[1] Runtime`);
+  console.log(`    Bun Version   : ${Bun.version} (${process.execPath})`);
+  console.log(`    Node Compat   : Node.js ${process.version}`);
+  console.log(`    Platform      : ${process.platform} (${process.arch})`);
+
+  // 2. cmux Socket
+  console.log(`\n[2] cmux Connection`);
+  const sock = resolveCmuxSocketPath();
+  const sockExists = existsSync(sock);
+  console.log(`    Socket Path   : ${sock}`);
+  console.log(`    Socket Exists : ${sockExists ? "✓ Yes" : "✕ Not found (Is cmux running?)"}`);
+
+  // 3. Network & Tailscale
+  console.log(`\n[3] Network Configuration`);
+  const tsIp = detectTailscaleIp();
+  console.log(`    Tailscale IP  : ${tsIp ? `✓ ${tsIp}` : "✕ Not detected (Install/login Tailscale for remote iPhone access)"}`);
+  console.log(`    Local Port    : ${port}`);
+
+  // 4. Daemon & HTTP Service
+  console.log(`\n[4] Service Health`);
+  const plistPath = join(homedir(), "Library/LaunchAgents/com.felix.cmux-orbit.plist");
+  console.log(`    LaunchAgent   : ${existsSync(plistPath) ? "✓ Installed" : "✕ Not installed (Run ./bin/cmux-orbit install-service)"}`);
+
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/health`, {
+      headers: { Connection: "close" },
+      signal: AbortSignal.timeout(2000),
+    });
+    if (res.ok) {
+      const data = (await res.json()) as any;
+      console.log(`    HTTP API      : ✓ Responding 200 OK (Version: ${data.version || "1.0.0"})`);
+      console.log(`    cmux Synced   : ${data.cmuxConnected ? "✓ Connected" : "✕ Disconnected"}`);
+    } else {
+      console.log(`    HTTP API      : ✕ HTTP ${res.status}`);
+    }
+  } catch (e: any) {
+    console.log(`    HTTP API      : ✕ Unreachable on port ${port} (${e.message})`);
+  }
+
+  // 5. Media Cache
+  console.log(`\n[5] Media Storage`);
+  const mediaDir = "/tmp/cmux-orbit-media";
+  if (existsSync(mediaDir)) {
+    const files = readdirSync(mediaDir);
+    let totalBytes = 0;
+    for (const file of files) {
+      try {
+        totalBytes += statSync(join(mediaDir, file)).size;
+      } catch {}
+    }
+    const mb = (totalBytes / (1024 * 1024)).toFixed(2);
+    console.log(`    Media Cache   : ${files.length} items (${mb} MB in ${mediaDir})`);
+  } else {
+    console.log(`    Media Cache   : Directory empty / not yet created`);
+  }
+
+  // 6. Native Companions
+  console.log(`\n[6] Native Companion Apps`);
+  const macBin = join(resolve(import.meta.dir, ".."), "native/.build/out/Products/Debug/cmux-orbit-mac");
+  console.log(`    macOS Binary  : ${existsSync(macBin) ? "✓ Built (native/.build/.../cmux-orbit-mac)" : "Not built yet (Run: cd native && swift build)"}`);
+
+  console.log(`\n✓ Diagnostic complete.`);
+  process.exit(0);
+}
+
+if (subcmd === "clean-media") {
+  const mediaDir = "/tmp/cmux-orbit-media";
+  if (!existsSync(mediaDir)) {
+    console.log("No media directory found.");
+    process.exit(0);
+  }
+  const files = readdirSync(mediaDir);
+  const now = Date.now();
+  const maxAgeMs = 24 * 60 * 60 * 1000; // 24 hours
+  let deletedCount = 0;
+
+  for (const file of files) {
+    const filePath = join(mediaDir, file);
+    try {
+      const s = statSync(filePath);
+      if (now - s.mtimeMs > maxAgeMs) {
+        unlinkSync(filePath);
+        deletedCount++;
+      }
+    } catch {}
+  }
+  console.log(`✓ Cleaned ${deletedCount} temporary media files older than 24h.`);
   process.exit(0);
 }
 

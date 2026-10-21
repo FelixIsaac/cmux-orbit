@@ -1980,6 +1980,15 @@ function renderModal() {
             <button class="shortcut-btn slash" data-insert-slash="/resume">/resume</button>
             <button class="shortcut-btn slash" data-insert-slash="/model">/model</button>
           </div>
+          <div class="form-label" style="margin-top:10px;">Keyboard Shortcuts</div>
+          <div class="keyboard-shortcuts-list">
+            <div class="kbd-row"><span class="kbd-keys"><kbd>?</kbd> or <kbd>⌘/</kbd></span><span>Open this shortcuts sheet</span></div>
+            <div class="kbd-row"><span class="kbd-keys"><kbd>/</kbd></span><span>Focus composer or search</span></div>
+            <div class="kbd-row"><span class="kbd-keys"><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></span><span>One-tap approve / select TUI option</span></div>
+            <div class="kbd-row"><span class="kbd-keys"><kbd>y</kbd> / <kbd>n</kbd></span><span>Fast yes / no confirmation</span></div>
+            <div class="kbd-row"><span class="kbd-keys"><kbd>Esc</kbd></span><span>Close modal or blur input</span></div>
+            <div class="kbd-row"><span class="kbd-keys"><kbd>↵</kbd></span><span>Submit prompt (when in composer)</span></div>
+          </div>
         </div>
       </div>
     `;
@@ -3643,6 +3652,102 @@ window.addEventListener("drop", async (e) => {
     e.preventDefault();
     for (const file of Array.from(e.dataTransfer.files)) {
       await uploadAndAttachFile(file);
+    }
+  }
+});
+
+// Global Keyboard Navigation & Shortcuts
+window.addEventListener("keydown", async (e) => {
+  const activeEl = document.activeElement;
+  const isInputFocused =
+    activeEl && (activeEl.tagName === "INPUT" || activeEl.tagName === "TEXTAREA" || activeEl.isContentEditable);
+
+  // 1. Escape key handler
+  if (e.key === "Escape") {
+    if (state.activeModal) {
+      e.preventDefault();
+      closeModal();
+      return;
+    }
+    if (isInputFocused) {
+      activeEl.blur();
+      return;
+    }
+  }
+
+  // If typing in an input or textarea, let default input behavior happen
+  if (isInputFocused) return;
+
+  // Don't intercept if modifier keys like Cmd/Ctrl/Alt are pressed, except for standard combinations
+  if (e.metaKey || e.ctrlKey || e.altKey) {
+    if ((e.metaKey || e.ctrlKey) && e.key === "/") {
+      e.preventDefault();
+      openModal("shortcuts");
+    }
+    return;
+  }
+
+  // 2. '?' opens the shortcuts sheet
+  if (e.key === "?") {
+    e.preventDefault();
+    openModal("shortcuts");
+    return;
+  }
+
+  // 3. '/' focuses the composer or search
+  if (e.key === "/") {
+    if (state.screen === "surface") {
+      const composerInp = document.getElementById("composer-input");
+      if (composerInp) {
+        e.preventDefault();
+        composerInp.focus();
+        return;
+      }
+    } else if (state.screen === "mission") {
+      const searchInp = document.getElementById("mission-search-input");
+      if (searchInp) {
+        e.preventDefault();
+        searchInp.focus();
+        return;
+      }
+    }
+  }
+
+  // 4. Fast numbered or binary prompt shortcuts when a TUI prompt is pending
+  const promptDock = document.getElementById("tui-prompt-dock-container");
+  if (promptDock) {
+    const key = e.key.toLowerCase();
+    // Check if an exact button matches data-answer-key
+    const btn =
+      promptDock.querySelector(`[data-answer-key="${e.key}"]`) ||
+      promptDock.querySelector(`[data-answer-key="${key}"]`);
+    if (btn) {
+      e.preventDefault();
+      btn.click();
+      return;
+    }
+    // Also match 'y' for Yes / Approve, 'n' for No / Deny
+    if (key === "y") {
+      const yesBtn =
+        promptDock.querySelector('[data-answer-key="1"]') ||
+        promptDock.querySelector('[data-answer-key="y"]') ||
+        promptDock.querySelector('[data-answer-key="Y"]');
+      if (yesBtn) {
+        e.preventDefault();
+        yesBtn.click();
+        return;
+      }
+    } else if (key === "n") {
+      const noBtn =
+        promptDock.querySelector('[data-answer-key="3"]') ||
+        promptDock.querySelector('[data-answer-key="2"]') ||
+        promptDock.querySelector('[data-answer-key="n"]') ||
+        promptDock.querySelector('[data-answer-key="N"]');
+      if (noBtn) {
+        e.preventDefault();
+        noBtn.click();
+        return;
+      }
     }
   }
 });

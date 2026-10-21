@@ -10,6 +10,11 @@
     "start": "bun run src/server/index.ts",
     "dev": "bun --watch run src/server/index.ts",
     "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "build:native": "cd native && swift build",
+    "doctor": "bun ./bin/cmux-orbit doctor",
+    "logs": "bun ./bin/cmux-orbit logs",
+    "clean:media": "bun ./bin/cmux-orbit clean-media",
     "daemon:install": "bash scripts/install-launchd.sh",
     "daemon:restart": "launchctl kickstart -k gui/$(id -u)/com.felix.cmux-orbit",
     "daemon:status": "launchctl print gui/$(id -u)/com.felix.cmux-orbit",
@@ -33,5 +38,9 @@
     "@xterm/xterm": "6.0.0",
     "ansi_up": "6.0.6",
     "marked": "18.1.1"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.3",
+    "typescript": "7.0.2"
   }
 }
