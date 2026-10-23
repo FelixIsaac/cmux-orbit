@@ -110,8 +110,8 @@ export function isTrustedClientIp(ip?: string | null): boolean {
   if (parts.length === 4 && !parts.some(isNaN)) {
     if (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) return true;
   }
-  // Tailscale IPv6
-  if (clean.startsWith("fd7a:115c:a1e0:") || clean.startsWith("fe80:")) return true;
+  // Tailscale IPv6 (fe80 link-local removed: any LAN peer)
+  if (clean.startsWith("fd7a:115c:a1e0:")) return true;
   return false;
 }
 
@@ -366,7 +366,7 @@ export function startOrbitServer(port = Number(process.env.PORT || 4400)) {
   }, 4500);
 
   const server = Bun.serve<WsClientData>({
-    hostname: "0.0.0.0",
+    hostname: process.env.ORBIT_HOST || "127.0.0.1",
     port,
     async fetch(req, srv) {
       // 1. DNS Rebinding Protection: validate Host header
@@ -1000,5 +1000,5 @@ export function startOrbitServer(port = Number(process.env.PORT || 4400)) {
 if (import.meta.main) {
   const port = Number(process.env.PORT || 4400);
   const { server } = startOrbitServer(port);
-  console.log(`✦ cmux-orbit listening on http://0.0.0.0:${server.port}`);
+  console.log(`✦ cmux-orbit listening on http://${server.hostname}:${server.port}`);
 }

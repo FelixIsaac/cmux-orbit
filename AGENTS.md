@@ -287,7 +287,22 @@ Orbit reflects the complete lifecycle of agents across every interface element:
 
 ---
 
-## 7. The Agent Setup Blueprint (Copy-Paste Instruction Block)
+## 7. Host Network & Security Architecture
+
+1. **Loopback-Only Service Binding**:
+   - `cmux-orbit` binds strictly to `127.0.0.1:4400` (`ORBIT_HOST=127.0.0.1`).
+   - It is never directly bound to `0.0.0.0`, eliminating exposure on untrusted local LANs, hotels, cafes, or public Wi-Fi.
+2. **Tailscale Ingress Proxying**:
+   - Remote access from mobile devices (e.g., iPhone) routes through `tailscale serve` (e.g. `tcp://100.64.0.26:4400 -> tcp://127.0.0.1:4400`).
+   - Peer address validation (`isTrustedClientIp`) permits loopback (`127.0.0.1`, `::1`) and Tailscale CGNAT mesh ranges (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`).
+   - IPv6 link-local addresses (`fe80:`) are explicitly rejected as untrusted.
+3. **Hardened Host Environment**:
+   - SSH access on the host Mac is strictly key-only (`PasswordAuthentication no`).
+   - **Third-Party Relay Policy**: `cmux-relay` (from upstream `NewTurn2017/cmux-remote`) listens on `0.0.0.0:4399`. It is completely unreferenced by `cmux-orbit` code. Agents must **NEVER** modify, kill, restart, or alter `cmux-relay` configuration without explicit user instruction.
+
+---
+
+## 8. The Agent Setup Blueprint (Copy-Paste Instruction Block)
 
 When introducing a new agent or developer to `cmux-orbit` inside `cmux`, provide them with this exact quote block to set up the entire stack with zero manual steps:
 
@@ -298,13 +313,13 @@ When introducing a new agent or developer to `cmux-orbit` inside `cmux`, provide
 >    - Ensure `cmux` is running on your Mac with socket control enabled:
 >      Verify `~/.config/cmux/cmux.json` contains `"automation": { "socketControlMode": "allowAll" }`.
 >    - Ensure `bun` is installed: `which bun` (if missing: `brew install oven-sh/bun/bun`).
->    - Ensure `tailscale` is running if accessing remotely: `tailscale status`.
+>    - Ensure Tailscale is active: `/Applications/Tailscale.app/Contents/MacOS/Tailscale status`.
 > 
 > 2. **Start or Install the Background Service**:
 >    ```bash
 >    cd /Users/felix/Projects/cmux-orbit
 >    
->    # Install and launch the persistent macOS background daemon on port 4400:
+>    # Install and launch the persistent macOS background daemon on loopback (127.0.0.1:4400):
 >    ./bin/cmux-orbit install-service
 >    
 >    # Verify the daemon is active and print your iPhone connection URL:
@@ -331,14 +346,14 @@ When introducing a new agent or developer to `cmux-orbit` inside `cmux`, provide
 > 
 > 5. **Connect Your iPhone / Mobile Device**:
 >    - Open Safari on your phone (connected to Tailscale).
->    - Navigate to the URL printed by `./bin/cmux-orbit status` (e.g. `http://100.64.0.26:4400`).
+>    - Navigate to the URL printed by `./bin/cmux-orbit status` (e.g. `http://100.64.0.26:4400` via `tailscale serve`).
 >    - Tap **Share (↑) → Add to Home Screen → Add**.
 >    - Enjoy full Agent-First Mission Control with 1-tap TUI approvals, reflowed markdown, and multimedia paste!
 ```
 
 ---
 
-## 8. Quality Checklist for Future Changes
+## 9. Quality Checklist for Future Changes
 
 Before submitting any commit or pull request to `cmux-orbit`:
 1. [ ] **Doc Check**: Have you verified the official documentation or protocol schema for any new API?
@@ -346,6 +361,7 @@ Before submitting any commit or pull request to `cmux-orbit`:
 3. [ ] **Code Audit**: Does `screenAnalyzer.ts` / `transcriptEngine.ts` handle edge cases (multiline, ANSI escapes, XML tags, missing fields)?
 4. [ ] **Lifecycle Fidelity**: Does state update synchronously across Mission Control, surface tabs, conversation stream, macOS Menu Bar/HUD, and iOS Live Activities?
 5. [ ] **Input Ergonomics**: Can the user paste multimedia / images into the composer on both desktop and mobile?
-6. [ ] **Network Resilience**: Does the client reconnect gracefully after waking from sleep or switching networks?
-7. [ ] **Zero Dependency Bloat**: Does `native/` compile cleanly with pure Apple frameworks and zero third-party package dependencies?
-8. [ ] **Tests Green**: Does `bun test` pass 100%?
+6. [ ] **Security & Bind Verification**: Does `cmux-orbit` bind strictly to `127.0.0.1`? Are all untrusted LAN / `fe80` requests blocked? Is `cmux-relay` left untouched?
+7. [ ] **Network Resilience**: Does the client reconnect gracefully after waking from sleep or switching networks?
+8. [ ] **Zero Dependency Bloat**: Does `native/` compile cleanly with pure Apple frameworks and zero third-party package dependencies?
+9. [ ] **Tests Green**: Does `bun test` pass 100%?

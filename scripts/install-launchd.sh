@@ -27,6 +27,8 @@ cat <<EOF > "$PLIST_PATH"
   <dict>
     <key>PORT</key>
     <string>4400</string>
+    <key>ORBIT_HOST</key>
+    <string>127.0.0.1</string>
     <key>PATH</key>
     <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>

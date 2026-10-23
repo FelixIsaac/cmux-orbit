@@ -33,9 +33,10 @@ if (subcmd === "status") {
   const tsIp = detectTailscaleIp();
   console.log(`✦ cmux-orbit status`);
   console.log(`  cmux.sock : ${sock} (${existsSync(sock) ? "✓ connected" : "✕ missing"})`);
-  console.log(`  Local URL : http://127.0.0.1:${port}`);
+  console.log(`  Local URL : http://127.0.0.1:${port} (loopback only)`);
   if (tsIp) {
-    console.log(`  Tailscale : http://${tsIp}:${port}  <-- Open this on your iPhone (Add to Home Screen)`);
+    console.log(`  Tailscale : http://${tsIp}:${port} (via tailscale serve; not on LAN)`);
+    console.log(`              <-- Open this on your iPhone (Add to Home Screen)`);
   }
   try {
     const res = await fetch(`http://127.0.0.1:${port}/api/dashboard`, {
@@ -146,6 +147,8 @@ if (subcmd === "doctor") {
   const tsIp = detectTailscaleIp();
   console.log(`    Tailscale IP  : ${tsIp ? `✓ ${tsIp}` : "✕ Not detected (Install/login Tailscale for remote iPhone access)"}`);
   console.log(`    Local Port    : ${port}`);
+  console.log(`    Bind Host     : 127.0.0.1 (Loopback only; LAN access disabled)`);
+  console.log(`    Tailscale Net : ${tsIp ? `http://${tsIp}:${port} via tailscale serve` : "inactive"}`);
 
   // 4. Daemon & HTTP Service
   console.log(`\n[4] Service Health`);
@@ -247,6 +250,8 @@ if (subcmd === "install-service") {
   <dict>
     <key>PORT</key>
     <string>${port}</string>
+    <key>ORBIT_HOST</key>
+    <string>127.0.0.1</string>
     <key>PATH</key>
     <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
@@ -266,9 +271,9 @@ if (subcmd === "install-service") {
   const loadRes = Bun.spawnSync(["launchctl", "load", "-w", plistPath]);
   const tsIp = detectTailscaleIp();
   console.log(`✓ Installed & started launchd service: ${plistPath} (exit=${loadRes.exitCode})`);
-  console.log(`  Local URL : http://127.0.0.1:${port}`);
+  console.log(`  Local URL : http://127.0.0.1:${port} (loopback only)`);
   if (tsIp) {
-    console.log(`  iPhone URL: http://${tsIp}:${port}`);
+    console.log(`  iPhone URL: http://${tsIp}:${port} (via tailscale serve; not on LAN)`);
   }
   process.exit(0);
 }
@@ -289,7 +294,7 @@ if (subcmd === "uninstall-service") {
 const { startOrbitServer } = await import("../src/server/index");
 const tsIp = detectTailscaleIp();
 const { server } = startOrbitServer(port);
-console.log(`✦ cmux-orbit running on http://0.0.0.0:${server.port}`);
+console.log(`✦ cmux-orbit running on http://${server.hostname}:${server.port} (loopback only)`);
 if (tsIp) {
-  console.log(`  📱 iPhone Tailscale URL: http://${tsIp}:${server.port}`);
+  console.log(`  📱 iPhone Tailscale URL: http://${tsIp}:${server.port} (via tailscale serve)`);
 }

@@ -36,7 +36,9 @@ describe("Security & Privacy Hardening", () => {
     expect(isTrustedClientIp("100.120.5.1")).toBe(true);
     expect(isTrustedClientIp("fd7a:115c:a1e0::1")).toBe(true);
 
-    // Untrusted LAN IPs require Orbit Auth Token
+    // Untrusted LAN IPs and fe80 link-local IPs are rejected (fe80 trust removed)
+    expect(isTrustedClientIp("fe80::1")).toBe(false);
+    expect(isTrustedClientIp("fe80::1a2b:3c4d:5e6f")).toBe(false);
     expect(isTrustedClientIp("192.168.1.55")).toBe(false);
     expect(isTrustedClientIp("10.0.0.42")).toBe(false);
     expect(isTrustedClientIp("8.8.8.8")).toBe(false);
