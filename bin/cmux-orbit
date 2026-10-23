@@ -56,9 +56,10 @@ if (subcmd === "status") {
   console.log(`✦ cmux-orbit status`);
   console.log(`  cmux.sock : ${sock} (${existsSync(sock) ? "✓ connected" : "✕ missing"})`);
   console.log(`  Local URL : http://127.0.0.1:${port} (loopback only)`);
+  console.log(`  MagicDNS  : http://felixs-helm:${port} (via tailscale serve --http)`);
   if (tsIp) {
-    console.log(`  Tailscale : http://${tsIp}:${port} (via tailscale serve; not on LAN)`);
-    console.log(`              <-- Open this on your iPhone (Add to Home Screen)`);
+    console.log(`  Tailnet   : http://${tsIp}:${port} (or http://felixs-helm:${port})`);
+    console.log(`              <-- Open on your iPhone (Tailscale-User-Login verified)`);
   }
   try {
     const res = await fetch(`http://127.0.0.1:${port}/api/dashboard`, {
@@ -172,7 +173,8 @@ if (subcmd === "doctor") {
   console.log(`    Tailscale IP  : ${tsIp ? `✓ ${tsIp}` : "✕ Not detected (Install/login Tailscale for remote iPhone access)"}`);
   console.log(`    Local Port    : ${port}`);
   console.log(`    Bind Host     : 127.0.0.1 (Loopback only; LAN access disabled)`);
-  console.log(`    Tailscale Net : ${tsIp ? `http://${tsIp}:${port} via tailscale serve` : "inactive"}`);
+  console.log(`    MagicDNS URL  : http://felixs-helm:${port} via tailscale serve --http`);
+  console.log(`    Identity Auth : Tailscale-User-Login allowlist (default: felix)`);
 
   // 4. Daemon & HTTP Service
   console.log(`\n[4] Service Health`);

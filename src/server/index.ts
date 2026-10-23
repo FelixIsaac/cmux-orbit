@@ -36,6 +36,7 @@ interface WsClientData {
   watchedWorkspaceId?: string;
   watchedSurfaceId?: string;
   lastSurfaceHash?: string;
+  tailscaleUser?: string;
 }
 
 const STATE_DIR = join(homedir(), ".local/state/cmux-orbit");
@@ -77,6 +78,7 @@ const ALLOWED_HOSTNAMES = new Set([
   LOCAL_HOST.includes(".") ? LOCAL_HOST.split(".")[0] : `${LOCAL_HOST}.local`,
   "felixs-helm",
   "felixs-helm.local",
+  "felixs-helm.hs.lint.internal",
 ]);
 
 export function isValidHostHeader(hostHeader?: string | null): boolean {
@@ -92,7 +94,7 @@ export function isValidHostHeader(hostHeader?: string | null): boolean {
   }
 
   if (ALLOWED_HOSTNAMES.has(host)) return true;
-  if (host.endsWith(".ts.net")) return true;
+  if (host.endsWith(".ts.net") || host.endsWith(".hs.lint.internal") || host.endsWith(".internal")) return true;
   // Tailscale IPv4 100.64.0.0/10 (100.64.x.x - 100.127.x.x)
   const parts = host.split(".").map((n) => parseInt(n, 10));
   if (parts.length === 4 && !parts.some(isNaN)) {
@@ -104,22 +106,78 @@ export function isValidHostHeader(hostHeader?: string | null): boolean {
 export function isTrustedClientIp(ip?: string | null): boolean {
   if (!ip) return false;
   const clean = ip.replace(/^::ffff:/, "");
-  if (clean === "127.0.0.1" || clean === "::1" || clean === "localhost") return true;
-  // Tailscale IPv4 100.64.0.0/10
-  const parts = clean.split(".").map((n) => parseInt(n, 10));
-  if (parts.length === 4 && !parts.some(isNaN)) {
-    if (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) return true;
-  }
-  // Tailscale IPv6 (fe80 link-local removed: any LAN peer)
-  if (clean.startsWith("fd7a:115c:a1e0:")) return true;
-  return false;
+  return clean === "127.0.0.1" || clean === "::1" || clean === "localhost";
 }
 
-export function verifyRequestAuth(req: Request, clientIp?: string | null): { ok: boolean; setCookie?: string } {
+let _cachedSelfTailscaleLogin: string | null = null;
+export function getSelfTailscaleLogin(): string | null {
+  if (_cachedSelfTailscaleLogin) return _cachedSelfTailscaleLogin;
+  try {
+    const proc = Bun.spawnSync([
+      "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+      "status",
+      "--json",
+    ]);
+    if (proc.exitCode === 0) {
+      const json = JSON.parse(proc.stdout.toString());
+      const selfUserId = json?.Self?.UserID;
+      if (selfUserId && json?.User?.[selfUserId]?.LoginName) {
+        _cachedSelfTailscaleLogin = json.User[selfUserId].LoginName.toLowerCase().trim();
+        return _cachedSelfTailscaleLogin;
+      }
+    }
+  } catch {}
+  return "felix";
+}
+
+export function getAllowedTailscaleLogins(): Set<string> {
+  const envVal = process.env.ORBIT_ALLOWED_TAILSCALE_LOGINS;
+  if (envVal) {
+    return new Set(
+      envVal
+        .split(",")
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean)
+    );
+  }
+  const defaultLogin = getSelfTailscaleLogin() || "felix";
+  return new Set([defaultLogin]);
+}
+
+export interface AuthResult {
+  ok: boolean;
+  forbidden?: boolean;
+  tailscaleUser?: string;
+  error?: string;
+  setCookie?: string;
+}
+
+export function verifyRequestAuth(req: Request, clientIp?: string | null): AuthResult {
+  // 1. If Tailscale-User-Login header is present (injected by tailscale serve --http)
+  const tsHeader = req.headers.get("tailscale-user-login");
+  if (tsHeader !== null) {
+    const login = tsHeader.trim().toLowerCase();
+    if (!login) {
+      return { ok: false, forbidden: true, error: "Forbidden: Empty Tailscale user header" };
+    }
+    const allowed = getAllowedTailscaleLogins();
+    if (allowed.has(login)) {
+      return { ok: true, tailscaleUser: login };
+    }
+    console.warn(`[auth] Blocked unauthorized Tailscale user: "${login}"`);
+    return {
+      ok: false,
+      forbidden: true,
+      error: `Forbidden: Tailscale user '${login}' is not permitted`,
+    };
+  }
+
+  // 2. Requests with NO Tailscale header from true loopback (the Mac itself) stay trusted
   if (isTrustedClientIp(clientIp)) {
     return { ok: true };
   }
 
+  // 3. Non-loopback requests without Tailscale identity require Orbit Auth Token
   const expectedToken = getOrCreateOrbitAuthToken();
   const url = new URL(req.url);
 
@@ -147,7 +205,7 @@ export function verifyRequestAuth(req: Request, clientIp?: string | null): { ok:
     return { ok: true };
   }
 
-  return { ok: false };
+  return { ok: false, forbidden: false, error: "Unauthorized: Orbit auth token required" };
 }
 
 export function isCsrfSafe(req: Request): boolean {
@@ -385,8 +443,20 @@ export function startOrbitServer(port = Number(process.env.PORT || 4400)) {
       const pathname = url.pathname;
 
       if (!auth.ok) {
+        if (auth.forbidden) {
+          if (pathname.startsWith("/api/")) {
+            return jsonResponse({ ok: false, error: auth.error || "Forbidden: Tailscale user not allowed" }, 403);
+          }
+          return withSecurityHeaders(
+            new Response(`Forbidden: Tailscale user not permitted on this Orbit instance.`, {
+              status: 403,
+              headers: { "Content-Type": "text/plain; charset=utf-8" },
+            })
+          );
+        }
+
         if (pathname.startsWith("/api/")) {
-          return jsonResponse({ ok: false, error: "Unauthorized: Orbit auth token required" }, 401);
+          return jsonResponse({ ok: false, error: auth.error || "Unauthorized: Orbit auth token required" }, 401);
         }
         return withSecurityHeaders(
           new Response(renderAuthHtml(), {
@@ -410,7 +480,9 @@ export function startOrbitServer(port = Number(process.env.PORT || 4400)) {
           }
         }
         const upgraded = srv.upgrade(req, {
-          data: {},
+          data: {
+            tailscaleUser: auth.tailscaleUser,
+          },
         });
         if (upgraded) return undefined;
         return withSecurityHeaders(new Response("WebSocket upgrade failed", { status: 400 }));

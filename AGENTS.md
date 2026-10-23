@@ -292,10 +292,11 @@ Orbit reflects the complete lifecycle of agents across every interface element:
 1. **Loopback-Only Service Binding**:
    - `cmux-orbit` binds strictly to `127.0.0.1:4400` (`ORBIT_HOST=127.0.0.1`).
    - It is never directly bound to `0.0.0.0`, eliminating exposure on untrusted local LANs, hotels, cafes, or public Wi-Fi.
-2. **Tailscale Ingress Proxying**:
-   - Remote access from mobile devices (e.g., iPhone) routes through `tailscale serve` (e.g. `tcp://100.64.0.26:4400 -> tcp://127.0.0.1:4400`).
-   - Peer address validation (`isTrustedClientIp`) permits loopback (`127.0.0.1`, `::1`) and Tailscale CGNAT mesh ranges (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`).
-   - IPv6 link-local addresses (`fe80:`) are explicitly rejected as untrusted.
+2. **Tailscale Ingress Proxying & Identity Enforcement**:
+   - Remote access from mobile devices routes through Tailscale HTTP serve (`tailscale serve --http=4400 http://127.0.0.1:4400`) using MagicDNS (`http://felixs-helm:4400` or `http://felixs-helm.hs.lint.internal:4400`).
+   - Tailscale reverse proxy automatically injects `Tailscale-User-Login` after cryptographically validating the WireGuard peer identity and stripping any client-supplied headers.
+   - `verifyRequestAuth` enforces an allowlist (`ORBIT_ALLOWED_TAILSCALE_LOGINS`, default: `felix`). Non-allowlisted peers on the shared Headscale network (`vas`, `yong-fong`, etc.) receive an immediate `403 Forbidden`.
+   - Blanket trust for `100.64.0.0/10` and `fd7a` has been removed from `isTrustedClientIp`. Only true loopback (`127.0.0.1`, `::1`) with no Tailscale headers is trusted without identity.
 3. **Hardened Host Environment**:
    - SSH access on the host Mac is strictly key-only (`PasswordAuthentication no`).
    - **Third-Party Relay Policy**: `cmux-relay` (from upstream `NewTurn2017/cmux-remote`) is locked down to `127.0.0.1:4399` and exposed only to the tailnet via `tailscale serve --tcp 4399 tcp://127.0.0.1:4399`. It is completely unreferenced by `cmux-orbit` code. Agents must **NEVER** modify, kill, restart, or alter `cmux-relay` configuration without explicit user instruction.

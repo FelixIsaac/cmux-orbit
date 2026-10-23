@@ -84,7 +84,7 @@ cd cmux-orbit
 ```
 
 ### 2. Add to iPhone Home Screen
-1. On your iPhone (connected to Tailscale), open Safari and navigate to your Mac's Tailscale URL printed by `./bin/cmux-orbit status` (e.g., `http://100.64.0.26:4400`).
+1. On your iPhone (connected to Tailscale), open Safari and navigate to your Mac's Tailscale MagicDNS URL printed by `./bin/cmux-orbit status` (e.g., `http://felixs-helm:4400` or `http://100.64.0.26:4400`).
 2. Tap **Share (`↑`) → Add to Home Screen → Add**.
 3. Launch **cmux Orbit** from your Home Screen as a full-screen standalone app.
 
@@ -143,9 +143,10 @@ open CmuxOrbit.xcodeproj
 ---
 
 ## Security & Privacy
-- **100% Loopback-Bound & Tailnet-Scoped:** `cmux-orbit` binds strictly to `127.0.0.1:4400` (loopback only) and is completely unexposed on untrusted LAN or public Wi-Fi. Remote iPhone access is securely proxied through Tailscale (`tailscale serve` -> `127.0.0.1:4400`) or trusted mesh peer validation (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`). IPv6 link-local (`fe80`) trust is completely disabled to prevent rogue local network access.
+- **100% Loopback-Bound & Tailscale Identity-Gated:** `cmux-orbit` binds strictly to `127.0.0.1:4400` (loopback only) and is completely unexposed on untrusted LAN or public Wi-Fi. Remote access via Tailscale HTTP serve (`tailscale serve --http=4400`) cryptographically injects `Tailscale-User-Login`, which is matched against a strict identity allowlist (`ORBIT_ALLOWED_TAILSCALE_LOGINS`, default: `felix`). Non-allowlisted tailnet peers receive an immediate `403 Forbidden`.
+- **Zero Blanket IP Trust:** Blanket trust for `100.64.0.0/10` and `fd7a` has been removed. Raw loopback connections without Tailscale headers remain trusted only from the local machine.
 - **Zero Telemetry / Zero Cloud Relay:** All conversation transcripts, diffs, and terminal streams travel directly between your Mac and your phone over Tailscale WireGuard encryption.
-- **Hardened Host Environment:** Host SSH access is strictly key-only (`PasswordAuthentication no`). Upstream third-party listeners (such as `cmux-relay` on port 4399) are locked down to loopback (`127.0.0.1:4399`) and accessible only via Tailscale serve proxying.
+- **Hardened Host Environment:** Host SSH access is strictly key-only (`PasswordAuthentication no`). Upstream third-party listeners (`cmux-relay` on port 4399 for the official cmux iOS companion app) are locked down to loopback (`127.0.0.1:4399`) and accessible only via Tailscale serve proxying.
 
 ## License
 MIT © Felix Isaac Lim
