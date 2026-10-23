@@ -28,6 +28,28 @@ function detectTailscaleIp(): string | null {
   return null;
 }
 
+function resolveStableBunPath(): string {
+  const brewOptBun = "/opt/homebrew/opt/bun/bin/bun";
+  if (existsSync(brewOptBun)) return brewOptBun;
+
+  const intelBrewOptBun = "/usr/local/opt/bun/bin/bun";
+  if (existsSync(intelBrewOptBun)) return intelBrewOptBun;
+
+  try {
+    const brewRes = Bun.spawnSync(["brew", "--prefix", "bun"]);
+    if (brewRes.exitCode === 0) {
+      const prefix = brewRes.stdout.toString().trim();
+      const p = join(prefix, "bin/bun");
+      if (existsSync(p)) return p;
+    }
+  } catch {}
+
+  if (existsSync("/opt/homebrew/bin/bun")) return "/opt/homebrew/bin/bun";
+  if (existsSync("/usr/local/bin/bun")) return "/usr/local/bin/bun";
+
+  return process.execPath;
+}
+
 if (subcmd === "status") {
   const sock = resolveCmuxSocketPath();
   const tsIp = detectTailscaleIp();
@@ -131,7 +153,9 @@ if (subcmd === "doctor") {
 
   // 1. Runtime
   console.log(`[1] Runtime`);
+  const stableBun = resolveStableBunPath();
   console.log(`    Bun Version   : ${Bun.version} (${process.execPath})`);
+  console.log(`    Stable Bun    : ${stableBun}`);
   console.log(`    Node Compat   : Node.js ${process.version}`);
   console.log(`    Platform      : ${process.platform} (${process.arch})`);
 
@@ -228,7 +252,7 @@ if (subcmd === "install-service") {
   mkdirSync(launchAgentsDir, { recursive: true });
   const plistPath = join(launchAgentsDir, "com.felix.cmux-orbit.plist");
   const repoRoot = resolve(import.meta.dir, "..");
-  const bunPath = process.execPath;
+  const bunPath = resolveStableBunPath();
   const logDir = join(home, ".local/state/cmux-orbit");
   mkdirSync(logDir, { recursive: true });
 
@@ -270,7 +294,7 @@ if (subcmd === "install-service") {
   Bun.spawnSync(["launchctl", "unload", plistPath]);
   const loadRes = Bun.spawnSync(["launchctl", "load", "-w", plistPath]);
   const tsIp = detectTailscaleIp();
-  console.log(`✓ Installed & started launchd service: ${plistPath} (exit=${loadRes.exitCode})`);
+  console.log(`✓ Installed & started launchd service: ${plistPath} (bin: ${bunPath}, exit=${loadRes.exitCode})`);
   console.log(`  Local URL : http://127.0.0.1:${port} (loopback only)`);
   if (tsIp) {
     console.log(`  iPhone URL: http://${tsIp}:${port} (via tailscale serve; not on LAN)`);
