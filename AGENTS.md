@@ -298,7 +298,7 @@ Orbit reflects the complete lifecycle of agents across every interface element:
    - IPv6 link-local addresses (`fe80:`) are explicitly rejected as untrusted.
 3. **Hardened Host Environment**:
    - SSH access on the host Mac is strictly key-only (`PasswordAuthentication no`).
-   - **Third-Party Relay Policy**: `cmux-relay` (from upstream `NewTurn2017/cmux-remote`) listens on `0.0.0.0:4399`. It is completely unreferenced by `cmux-orbit` code. Agents must **NEVER** modify, kill, restart, or alter `cmux-relay` configuration without explicit user instruction.
+   - **Third-Party Relay Policy**: `cmux-relay` (from upstream `NewTurn2017/cmux-remote`) is locked down to `127.0.0.1:4399` and exposed only to the tailnet via `tailscale serve --tcp 4399 tcp://127.0.0.1:4399`. It is completely unreferenced by `cmux-orbit` code. Agents must **NEVER** modify, kill, restart, or alter `cmux-relay` configuration without explicit user instruction.
 4. **Stable LaunchAgent Runtime Resolution**:
    - The LaunchAgent plist template and installer (`scripts/install-launchd.sh`, `./bin/cmux-orbit install-service`) resolve the stable Homebrew opt binary path (`/opt/homebrew/opt/bun/bin/bun` or `$(brew --prefix bun)/bin/bun`), never pinning to a transient Cellar directory (`Cellar/bun/1.4.x/bin/bun`) that breaks on subsequent `brew upgrade` operations.
 

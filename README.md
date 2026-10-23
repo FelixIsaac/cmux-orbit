@@ -145,7 +145,7 @@ open CmuxOrbit.xcodeproj
 ## Security & Privacy
 - **100% Loopback-Bound & Tailnet-Scoped:** `cmux-orbit` binds strictly to `127.0.0.1:4400` (loopback only) and is completely unexposed on untrusted LAN or public Wi-Fi. Remote iPhone access is securely proxied through Tailscale (`tailscale serve` -> `127.0.0.1:4400`) or trusted mesh peer validation (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`). IPv6 link-local (`fe80`) trust is completely disabled to prevent rogue local network access.
 - **Zero Telemetry / Zero Cloud Relay:** All conversation transcripts, diffs, and terminal streams travel directly between your Mac and your phone over Tailscale WireGuard encryption.
-- **Hardened Host Environment:** Host SSH access is strictly key-only (`PasswordAuthentication no`). Upstream third-party listeners (such as `cmux-relay` on port 4399) remain unlinked and isolated from cmux-orbit.
+- **Hardened Host Environment:** Host SSH access is strictly key-only (`PasswordAuthentication no`). Upstream third-party listeners (such as `cmux-relay` on port 4399) are locked down to loopback (`127.0.0.1:4399`) and accessible only via Tailscale serve proxying.
 
 ## License
 MIT © Felix Isaac Lim
